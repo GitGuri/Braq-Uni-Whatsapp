@@ -15,7 +15,9 @@ import { broadcastsRouter } from './routes/broadcasts.routes.js';
 import { productsRouter }   from './routes/products.routes.js';
 import { quotationsRouter } from './routes/quotations.routes.js';
 import { purchaseOrdersRouter } from './routes/purchaseOrders.routes.js';
-import { ticketsRouter }    from './routes/tickets.routes.js';
+import { ticketsRouter }          from './routes/tickets.routes.js';
+import { conversationsRouter }    from './routes/conversations.routes.js';
+import { schoolCatalogRouter }    from './routes/schoolCatalog.routes.js';
 
 const app = express();
 
@@ -54,7 +56,9 @@ app.use('/api/broadcasts',   broadcastsRouter);
 app.use('/api/products',     productsRouter);
 app.use('/api/quotations',   quotationsRouter);
 app.use('/api/purchase-orders', purchaseOrdersRouter);
-app.use('/api/tickets',      ticketsRouter);
+app.use('/api/tickets',          ticketsRouter);
+app.use('/api/conversations',    conversationsRouter);
+app.use('/api/school-catalog',   schoolCatalogRouter);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', async (_req, res) => {

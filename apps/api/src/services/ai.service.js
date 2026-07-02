@@ -75,6 +75,48 @@ const QUOTATION_SCHEMA = {
   required: ['items', 'unmatchedText'],
 };
 
+const QUOTATION_GATHER_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    status:               { type: 'STRING', enum: ['need_more_info', 'ready'] },
+    question:             { type: 'STRING' },
+    consolidatedRequest:  { type: 'STRING' },
+  },
+  required: ['status'],
+};
+
+// ── Multi-turn quotation gathering — checks if enough info, or asks one follow-up
+export async function gatherQuotationInfo(history, { products }) {
+  const system =
+    `You are a quotation assistant for Braq Uni, a uniform manufacturer.\n` +
+    `Review the conversation below and decide if you have enough information to generate a quotation.\n\n` +
+    `A complete quotation needs ALL of the following:\n` +
+    `• Item types (e.g. polo shirts, hoodies, jackets)\n` +
+    `• Quantities per item\n` +
+    `• Sizes needed (e.g. S/M/L/XL or age ranges like 5-6, 7-8)\n` +
+    `• Branding requirements (logo, embroidery, printing, or none)\n\n` +
+    `Colors are helpful but not mandatory — don't block on them.\n\n` +
+    `If information is missing, set status to "need_more_info" and ask ONE short, friendly follow-up question.\n` +
+    `If you have enough information, set status to "ready" and consolidate everything the customer said into a single structured "consolidatedRequest" string.\n\n` +
+    `Available product catalog:\n` +
+    products.map(p => `${p.id} | ${p.name} | ${p.category} | sizes: ${JSON.stringify(p.sizes)}`).join('\n');
+
+  const conversation = history
+    .map(h => `${h.role === 'client' ? 'Customer' : 'Assistant'}: ${h.text}`)
+    .join('\n');
+
+  try {
+    return await callGemini({ system, schema: QUOTATION_GATHER_SCHEMA, userText: conversation });
+  } catch (err) {
+    logger.error('Gemini quotation gather failed', { error: err.message });
+    // Fail gracefully — proceed with what we have
+    return {
+      status: 'ready',
+      consolidatedRequest: history.filter(h => h.role === 'client').map(h => h.text).join('\n'),
+    };
+  }
+}
+
 // ── Parse a free-text quotation request against the catalog ──────────────────
 export async function parseQuotationRequest(freeText, { products }) {
   const system =

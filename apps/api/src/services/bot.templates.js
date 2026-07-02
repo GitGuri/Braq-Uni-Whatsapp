@@ -36,11 +36,54 @@ export const TEMPLATES = {
     `6️⃣  Speak to a consultant\n\n` +
     `Reply *0* at any time to return to the main menu.`,
 
-  RETAIL_PRICING: () =>
-    `Please tell us what you are looking for — item type, size, and quantity — and a consultant will confirm pricing and availability for you shortly.`,
+  RETAIL_PRODUCT_LIST: ({ products }) => {
+    if (!products || !products.length) {
+      return `Our product catalog is currently being updated. Please speak to a consultant for pricing.\n\nReply *0* to return to the main menu.`;
+    }
+    const byCategory = {};
+    for (const p of products) {
+      const cat = p.category.charAt(0).toUpperCase() + p.category.slice(1);
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(p);
+    }
+    let msg = `🛍️ *Braq Uni — Product Pricing*\n\n`;
+    for (const [cat, items] of Object.entries(byCategory)) {
+      msg += `*${cat}*\n`;
+      for (const item of items) {
+        msg += `• ${item.name} — R ${Number(item.price).toFixed(2)}\n`;
+        if (Array.isArray(item.sizes) && item.sizes.length) {
+          msg += `  Sizes: ${item.sizes.join(', ')}\n`;
+        }
+      }
+      msg += '\n';
+    }
+    msg += `To place an order or ask about availability, reply *7* to speak to a consultant.\n`;
+    msg += `Reply *0* to return to the main menu.`;
+    return msg;
+  },
 
-  RETAIL_SCHOOL_INFO: () =>
-    `Please share the *name of the school* and the items you need. We will check what we have available and guide you from there.`,
+  RETAIL_SCHOOL_SELECT: ({ schools }) =>
+    `🏫 *School Uniform Information*\n\n` +
+    `We carry uniforms for the following schools. Please reply with the number:\n\n` +
+    schools.map((s, i) => `${i + 1}. ${s}`).join('\n') +
+    `\n\nReply *0* to return to the main menu.`,
+
+  RETAIL_SCHOOL_UNIFORMS: ({ schoolName, uniforms }) => {
+    let msg = `🏫 *${schoolName} — Available Uniforms*\n\n`;
+    for (const u of uniforms) {
+      msg += `• *${u.uniform_type}* — R ${Number(u.price).toFixed(2)}\n`;
+      if (Array.isArray(u.sizes) && u.sizes.length) {
+        msg += `  Sizes: ${u.sizes.join(', ')}\n`;
+      }
+      if (u.description) msg += `  ${u.description}\n`;
+    }
+    msg += `\nTo purchase or ask about availability, reply *7* to speak to a consultant.\n`;
+    msg += `Reply *0* to return to the main menu.`;
+    return msg;
+  },
+
+  RETAIL_SCHOOL_NOT_FOUND: () =>
+    `Sorry, we don't have a record of that school in our catalog.\n\nReply *7* to speak to a consultant who can assist you, or *0* to return to the main menu.`,
 
   RETAIL_HOURS: () =>
     `🕐 *Braq Uni — Trading Hours*\n\n` +
@@ -66,16 +109,24 @@ export const TEMPLATES = {
     `\n\nWe will notify you as soon as it is ready for collection.`,
 
   // ── CORPORATE ──────────────────────────────────────────────────────────────
+  QUOTATION_ASK_DESCRIPTION: ({ name } = {}) =>
+    `Hello${name ? ` *${name}*` : ''}! 😊\n\n` +
+    `Please describe what you need a quotation for. You can write it however you like, for example:\n\n` +
+    `_"300 crew-neck T-shirts, cotton, logo printed on front\n` +
+    `150 polo shirts, logo embroidered on chest\n` +
+    `100 hoodies, fleece, logo printed on back"_\n\n` +
+    `I'll help you fill in any missing details before we prepare your quote.`,
+
   CORPORATE_MENU: () =>
     `Thank you for contacting Braq Uni for your bulk order enquiry.\n\n` +
     `Please select an option:\n\n` +
-    `1️⃣  Request quotation\n` +
-    `2️⃣  Repeat previous order\n` +
-    `3️⃣  New uniform development\n` +
-    `4️⃣  Manufacturing updates\n` +
-    `5️⃣  Delivery schedule\n` +
-    `6️⃣  Account queries\n` +
-    `7️⃣  Dedicated consultant support`,
+    `1️⃣  Repeat previous order\n` +
+    `2️⃣  New uniform development\n` +
+    `3️⃣  Manufacturing updates\n` +
+    `4️⃣  Delivery schedule\n` +
+    `5️⃣  Account queries\n` +
+    `6️⃣  Dedicated consultant support\n\n` +
+    `To request a quotation, reply *3* on the main menu or type *quote* at any time.`,
 
   CORPORATE_NEW_ORDER: () =>
     `Please describe what you need — garment type, quantity, branding requirements, and your preferred timeline — and we'll prepare a quotation for you.`,

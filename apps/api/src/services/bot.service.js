@@ -1,8 +1,9 @@
 import { query } from '../db/pool.js';
 import { sendTextMessage } from './whatsapp.service.js';
 import { TEMPLATES } from './bot.templates.js';
-import { answerFaq } from './ai.service.js';
+import { answerFaq, gatherQuotationInfo } from './ai.service.js';
 import { listProducts } from './catalog.service.js';
+import { listDistinctSchools, listUniformsForSchool } from './schoolCatalog.service.js';
 import { createFromFreeText } from './quotations.service.js';
 import { repeatOrder, createOrder, getStageProgress, getOrderById, recordDesignApproval } from './orders.service.js';
 import { submitPurchaseOrder } from './purchaseOrders.service.js';
@@ -15,9 +16,8 @@ import { logger } from '../utils/logger.js';
 
 // Where to resume after the registration gate completes.
 const RESUME_TEMPLATES = {
-  quotation_requested:       TEMPLATES.CORPORATE_NEW_ORDER,
+  quotation_requested:       TEMPLATES.QUOTATION_ASK_DESCRIPTION,
   corporate_uniform_garment: TEMPLATES.UNIFORM_INTAKE_GARMENT,
-  retail_pricing:            TEMPLATES.RETAIL_PRICING,
 };
 
 // ── Intent detection ──────────────────────────────────────────────────────────
@@ -149,9 +149,9 @@ async function completeUniformIntake(quantityText, convo, client, R, updateState
   return R(TEMPLATES.UNIFORM_INTAKE_COMPLETE, { reference: order.reference });
 }
 
-// ── Build and send a PDF quotation from the client's free-text request ───────
-async function sendQuotation(freeText, convo, client, phoneNumber, R, updateState) {
-  const { quotation, unmatchedText } = await createFromFreeText(client.id, freeText);
+// ── Generate PDF quotation and send it to the client ─────────────────────────
+async function generateAndSendQuotation(consolidatedText, convo, client, phoneNumber, R, updateState) {
+  const { quotation, unmatchedText } = await createFromFreeText(client.id, consolidatedText);
 
   if (quotation.line_items.length) {
     await sendDocument(phoneNumber, {
@@ -161,19 +161,55 @@ async function sendQuotation(freeText, convo, client, phoneNumber, R, updateStat
     });
   }
 
-  await updateState(convo.id, 'awaiting_consultant');
+  await updateState(convo.id, 'awaiting_consultant', {
+    quotationHistory: null,
+    quotationFollowups: 0,
+  });
 
   if (unmatchedText.length) {
     return R(() =>
       (quotation.line_items.length
-        ? `I've sent a quotation for the items I could match.\n\n`
+        ? `✅ Your quotation *${quotation.reference}* has been sent as a PDF.\n\n`
         : ``) +
-      `A consultant will follow up to quote the following manually:\n` +
+      `A consultant will follow up to quote the following items manually:\n` +
       unmatchedText.map(t => `• ${t}`).join('\n')
     );
   }
 
-  return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
+  return R(() =>
+    `✅ Your quotation *${quotation.reference}* has been prepared and sent as a PDF.\n\n` +
+    `A consultant will be in touch to confirm details and discuss next steps. 😊`
+  );
+}
+
+// ── Multi-turn quotation gathering — AI asks follow-ups until enough info ─────
+async function handleQuotationGathering(body, convo, client, phoneNumber, R, updateState) {
+  const history = [...(convo.context.quotationHistory || [])];
+  history.push({ role: 'client', text: body });
+
+  const followupsAsked = convo.context.quotationFollowups || 0;
+  const products = await listProducts({});
+
+  if (followupsAsked < 3) {
+    const result = await gatherQuotationInfo(history, { products });
+
+    if (result.status === 'need_more_info' && result.question) {
+      history.push({ role: 'bot', text: result.question });
+      await updateState(convo.id, 'quotation_requested', {
+        quotationHistory: history,
+        quotationFollowups: followupsAsked + 1,
+      });
+      return R(() => result.question);
+    }
+
+    const consolidated = result.consolidatedRequest
+      || history.filter(h => h.role === 'client').map(h => h.text).join('\n');
+    return generateAndSendQuotation(consolidated, convo, client, phoneNumber, R, updateState);
+  }
+
+  // Max follow-ups reached — generate with everything gathered so far
+  const consolidated = history.filter(h => h.role === 'client').map(h => h.text).join('\n');
+  return generateAndSendQuotation(consolidated, convo, client, phoneNumber, R, updateState);
 }
 
 // ── Submit a purchase order against a previously shared quotation reference ──
@@ -309,7 +345,7 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     if (intent.value === 'quote') {
       return gateOrProceed(client, convo, 'quotation_requested', R, updateState, async () => {
         await updateState(convo.id, 'quotation_requested');
-        return R(TEMPLATES.CORPORATE_NEW_ORDER);
+        return R(TEMPLATES.QUOTATION_ASK_DESCRIPTION, { name: client.name });
       });
     }
     if (intent.value === 'po') {
@@ -352,10 +388,21 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
       await updateState(convo.id, 'awaiting_consultant');
       return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'our team' });
 
+    case 'retail_school_select': {
+      const schools = convo.context.schoolList || [];
+      const num = parseInt(body.trim());
+      if (!isNaN(num) && num >= 1 && num <= schools.length) {
+        const selectedSchool = schools[num - 1];
+        const uniforms = await listUniformsForSchool(selectedSchool);
+        await updateState(convo.id, 'main_menu');
+        if (!uniforms.length) return R(TEMPLATES.RETAIL_SCHOOL_NOT_FOUND);
+        return R(TEMPLATES.RETAIL_SCHOOL_UNIFORMS, { schoolName: selectedSchool, uniforms });
+      }
+      return R(TEMPLATES.RETAIL_SCHOOL_SELECT, { schools });
+    }
+
     case 'retail_pricing':
-    case 'retail_school_info':
     case 'retail_layby':
-      // Try the AI FAQ agent first; only escalate if it can't answer from the catalog
       return tryAnswerFaq(body, convo, R, updateState);
 
     case 'retail_collection':
@@ -371,8 +418,12 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
       return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
 
     case 'corporate_new_order':
+      // Legacy state — redirect to consultant
+      await updateState(convo.id, 'awaiting_consultant');
+      return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
+
     case 'quotation_requested':
-      return sendQuotation(body, convo, client, phoneNumber, R, updateState);
+      return handleQuotationGathering(body, convo, client, phoneNumber, R, updateState);
 
     case 'corporate_repeat_order':
     case 'corporate_manufacturing_update':
@@ -463,7 +514,7 @@ async function handleMainMenuSelection(option, phone, convo, client, R, updateSt
     case 3:
       return gateOrProceed(client, convo, 'quotation_requested', R, updateState, async () => {
         await updateState(convo.id, 'quotation_requested');
-        return R(TEMPLATES.CORPORATE_NEW_ORDER);
+        return R(TEMPLATES.QUOTATION_ASK_DESCRIPTION, { name: client.name });
       });
     case 4:
       await updateState(convo.id, 'retail_collection');
@@ -483,14 +534,22 @@ async function handleMainMenuSelection(option, phone, convo, client, R, updateSt
 // ── Retail menu selection handler ─────────────────────────────────────────────
 async function handleRetailMenuSelection(option, phone, convo, client, R, updateState) {
   switch (option) {
-    case 1:
-      return gateOrProceed(client, convo, 'retail_pricing', R, updateState, async () => {
-        await updateState(convo.id, 'retail_pricing');
-        return R(TEMPLATES.RETAIL_PRICING);
-      });
-    case 2:
-      await updateState(convo.id, 'retail_school_info');
-      return R(TEMPLATES.RETAIL_SCHOOL_INFO);
+    case 1: {
+      // Show full product list with prices immediately — no registration gate needed
+      const products = await listProducts({ clientType: 'retail' });
+      await updateState(convo.id, 'retail_menu');
+      return R(TEMPLATES.RETAIL_PRODUCT_LIST, { products });
+    }
+    case 2: {
+      // Show list of schools we carry uniforms for
+      const schools = await listDistinctSchools();
+      if (!schools.length) {
+        await updateState(convo.id, 'awaiting_consultant');
+        return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
+      }
+      await updateState(convo.id, 'retail_school_select', { schoolList: schools });
+      return R(TEMPLATES.RETAIL_SCHOOL_SELECT, { schools });
+    }
     case 3:
       return R(TEMPLATES.RETAIL_HOURS);
     case 4:
@@ -510,29 +569,24 @@ async function handleRetailMenuSelection(option, phone, convo, client, R, update
 // ── Corporate menu selection handler ──────────────────────────────────────────
 async function handleCorporateMenuSelection(option, phone, convo, client, R, updateState) {
   switch (option) {
-    case 1: // Request quotation
-      return gateOrProceed(client, convo, 'quotation_requested', R, updateState, async () => {
-        await updateState(convo.id, 'quotation_requested');
-        return R(TEMPLATES.CORPORATE_NEW_ORDER);
-      });
-    case 2: // Repeat previous order
+    case 1: // Repeat previous order
       await updateState(convo.id, 'corporate_repeat_order');
       return R(TEMPLATES.CORPORATE_REPEAT_ORDER_ASK);
-    case 3: // New uniform development
+    case 2: // New uniform development
       return gateOrProceed(client, convo, 'corporate_uniform_garment', R, updateState, async () => {
         await updateState(convo.id, 'corporate_uniform_garment');
         return R(TEMPLATES.UNIFORM_INTAKE_GARMENT);
       });
-    case 4: // Manufacturing updates
+    case 3: // Manufacturing updates
       await updateState(convo.id, 'corporate_manufacturing_update');
       return R(TEMPLATES.CORPORATE_MANUFACTURING_ASK);
-    case 5: // Delivery schedule
+    case 4: // Delivery schedule
       await updateState(convo.id, 'corporate_delivery_schedule');
       return R(TEMPLATES.CORPORATE_DELIVERY_ASK);
-    case 6: // Account queries — no automation, straight to a consultant
+    case 5: // Account queries
       await updateState(convo.id, 'awaiting_consultant');
       return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
-    case 7: // Dedicated consultant support
+    case 6: // Dedicated consultant support
       await updateState(convo.id, 'awaiting_consultant');
       return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a dedicated consultant' });
     default:

@@ -17,6 +17,8 @@ export const config = {
   apiBaseUrl: optional('API_BASE_URL', 'http://localhost:3000'),
 
   db: {
+    url:      optional('DATABASE_URL', ''),
+    // fallback individual params (used only if DATABASE_URL is not set)
     host:     optional('DB_HOST', 'localhost'),
     port:     parseInt(optional('DB_PORT', '5432'), 10),
     name:     optional('DB_NAME', 'postgres'),

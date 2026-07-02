@@ -343,6 +343,29 @@ const migrations = [
 `ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'ticket_category'`,
 `ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'ticket_description'`,
 
+// ── 019: retail school select state ──────────────────────────────────────────
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_school_select'`,
+
+// ── 020: quotation multi-turn gathering state ─────────────────────────────────
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'quotation_gathering'`,
+
+// ── 021: school catalog ───────────────────────────────────────────────────────
+`CREATE TABLE IF NOT EXISTS school_catalog (
+  id           UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_name  VARCHAR(200)  NOT NULL,
+  uniform_type VARCHAR(200)  NOT NULL,
+  description  TEXT,
+  sizes        JSONB         NOT NULL DEFAULT '[]',
+  price        NUMERIC(10,2) NOT NULL DEFAULT 0,
+  currency     VARCHAR(3)    NOT NULL DEFAULT 'ZAR',
+  is_active    BOOLEAN       NOT NULL DEFAULT true,
+  sort_order   INT           NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+)`,
+
+`CREATE INDEX IF NOT EXISTS idx_school_catalog_school ON school_catalog(school_name)`,
+
 // ── 018: updated_at auto-trigger ─────────────────────────────────────────────
 `CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$

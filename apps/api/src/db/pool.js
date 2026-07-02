@@ -4,16 +4,24 @@ import { logger } from '../utils/logger.js';
 
 const { Pool } = pg;
 
+const poolConfig = config.db.url
+  ? {
+      connectionString: config.db.url,
+    }
+  : {
+      host:     config.db.host,
+      port:     config.db.port,
+      database: config.db.name,
+      user:     config.db.user,
+      password: config.db.password,
+    };
+
 export const pool = new Pool({
-  host:     config.db.host,
-  port:     config.db.port,
-  database: config.db.name,
-  user:     config.db.user,
-  password: config.db.password,
-  ssl:      config.db.ssl ? { rejectUnauthorized: false } : false,
-  max: 20,                  // max connections in pool
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  ...poolConfig,
+  max: 20,
+  idleTimeoutMillis: 10000,
+  allowExitOnIdle: true,
+  ssl: { rejectUnauthorized: false },
 });
 
 pool.on('error', (err) => {
