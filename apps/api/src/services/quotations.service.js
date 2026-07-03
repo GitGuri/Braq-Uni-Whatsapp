@@ -100,15 +100,16 @@ export async function createFromFreeText(clientId, freeText) {
 
   const reference  = await nextQuotationNumber();
   const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const sentAt     = status === 'sent' ? new Date() : null;
 
   const { rows } = await query(
     `INSERT INTO quotations
        (reference, client_id, status, line_items, subtotal, vat_rate, vat_amount,
         total, currency, valid_until, sla_remind_at, sent_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CASE WHEN $3='sent' THEN NOW() ELSE NULL END)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING *`,
     [reference, clientId, status, JSON.stringify(allItems),
-     subtotal, VAT_RATE, vatAmount, total, currency, validUntil, slaRemindAt]
+     subtotal, VAT_RATE, vatAmount, total, currency, validUntil, slaRemindAt, sentAt]
   );
 
   return { quotation: rows[0], unmatchedText: unmatchedDescriptions };
