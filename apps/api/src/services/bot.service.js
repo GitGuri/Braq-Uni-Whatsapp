@@ -18,12 +18,39 @@ const RESUME_TEMPLATES = {
   corporate_uniform_garment: TEMPLATES.UNIFORM_INTAKE_GARMENT,
 };
 
+// ── Parent state map — used by the "back" command ────────────────────────────
+const PARENT_STATE = {
+  main_menu:                      'main_menu',
+  retail_menu:                    'main_menu',
+  retail_pricing:                 'retail_menu',
+  retail_layby:                   'retail_menu',
+  retail_hours:                   'retail_menu',
+  retail_collection:              'retail_menu',
+  retail_school_select:           'retail_menu',
+  corporate_menu:                 'main_menu',
+  corporate_new_order:            'corporate_menu',
+  corporate_repeat_order:         'corporate_menu',
+  corporate_manufacturing_update: 'corporate_menu',
+  corporate_delivery_schedule:    'corporate_menu',
+  quotation_requested:            'main_menu',
+  ticket_category:                'main_menu',
+  ticket_description:             'ticket_category',
+};
+
+const PARENT_TEMPLATE = {
+  main_menu:      (T) => T.MAIN_MENU,
+  retail_menu:    (T) => T.RETAIL_MENU,
+  corporate_menu: (T) => T.CORPORATE_MENU,
+  ticket_category:(T) => T.TICKET_ASK_CATEGORY,
+};
+
 // ── Intent detection ──────────────────────────────────────────────────────────
 function detectIntent(body) {
   const t = body.trim().toLowerCase();
 
   // Universal navigation — work in any state
   if (t === '0' || t === 'menu' || t === 'main menu') return { type: 'main_menu' };
+  if (t === 'back' || t === 'go back')                 return { type: 'back' };
   if (t === '9' || /^(speak to|talk to|connect me to|i need a) consultant/i.test(t))
     return { type: 'consultant' };
 
@@ -342,6 +369,13 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
   if (intent.type === 'main_menu') {
     await updateState(convo.id, 'main_menu');
     return R(TEMPLATES.MAIN_MENU);
+  }
+
+  if (intent.type === 'back') {
+    const parentState  = PARENT_STATE[state] ?? 'main_menu';
+    const templateGetter = PARENT_TEMPLATE[parentState] ?? ((T) => T.MAIN_MENU);
+    await updateState(convo.id, parentState);
+    return R(templateGetter(TEMPLATES));
   }
 
   if (intent.type === 'consultant') {

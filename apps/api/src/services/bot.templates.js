@@ -32,7 +32,7 @@ export const TEMPLATES = {
     `3️⃣  Store trading hours\n` +
     `4️⃣  Collection status\n` +
     `5️⃣  Lay-by information\n\n` +
-    `Reply *0* for the main menu | *9* to speak to a consultant.`,
+    `Reply *back* or *0* for the main menu | *9* to speak to a consultant.`,
 
   RETAIL_PRODUCT_LIST: ({ products }) => {
     if (!products || !products.length) {
@@ -55,8 +55,8 @@ export const TEMPLATES = {
       }
       msg += '\n';
     }
-    msg += `To place an order or ask about availability, reply *7* to speak to a consultant.\n`;
-    msg += `Reply *0* to return to the main menu.`;
+    msg += `To place an order or ask about availability, reply *9* to speak to a consultant.\n`;
+    msg += `Reply *back* for the shop menu | *0* for the main menu.`;
     return msg;
   },
 
@@ -64,7 +64,7 @@ export const TEMPLATES = {
     `🏫 *School Uniform Information*\n\n` +
     `We carry uniforms for the following schools. Please reply with the number:\n\n` +
     schools.map((s, i) => `${i + 1}. ${s}`).join('\n') +
-    `\n\nReply *0* to return to the main menu.`,
+    `\n\nReply *back* for the shop menu | *0* for the main menu.`,
 
   RETAIL_SCHOOL_UNIFORMS: ({ schoolName, uniforms }) => {
     let msg = `🏫 *${schoolName} — Available Uniforms*\n\n`;
@@ -75,8 +75,8 @@ export const TEMPLATES = {
       }
       if (u.description) msg += `  ${u.description}\n`;
     }
-    msg += `\nTo purchase or ask about availability, reply *7* to speak to a consultant.\n`;
-    msg += `Reply *0* to return to the main menu.`;
+    msg += `\nTo purchase or ask about availability, reply *9* to speak to a consultant.\n`;
+    msg += `Reply *back* for school list | *0* for the main menu.`;
     return msg;
   },
 
@@ -88,15 +88,18 @@ export const TEMPLATES = {
     `Mon – Fri: *8:00 AM – 5:00 PM*\n` +
     `Saturday:  *8:00 AM – 1:00 PM*\n` +
     `Sunday & Public Holidays: *Closed*\n\n` +
-    `We look forward to seeing you!`,
+    `We look forward to seeing you!\n\n` +
+    `Reply *back* for the shop menu | *0* for the main menu.`,
 
   RETAIL_LAYBY: () =>
     `We offer lay-by on selected items.\n\n` +
     `A *30% deposit* is required to secure your items. The balance is due before collection.\n\n` +
-    `To start a lay-by, reply *6* to be connected to a consultant now.`,
+    `To start a lay-by, reply *9* to speak to a consultant.\n\n` +
+    `Reply *back* for the shop menu | *0* for the main menu.`,
 
   RETAIL_COLLECTION_ASK: () =>
-    `Please share your *order reference number* and we will check the status for you right away.`,
+    `Please share your *order reference number* and we will check the status for you right away.\n\n` +
+    `Reply *back* for the shop menu | *0* for the main menu.`,
 
   RETAIL_COLLECTION_READY: ({ reference }) =>
     `✅ *Good news!*\n\nYour order is ready for collection.\n\nPlease bring your reference number when collecting.\n*Ref: ${reference}*`,
@@ -123,7 +126,7 @@ export const TEMPLATES = {
     `3️⃣  Manufacturing update\n` +
     `4️⃣  Delivery schedule\n` +
     `5️⃣  Account queries\n\n` +
-    `Reply *0* for the main menu | *9* for a dedicated consultant.\n` +
+    `Reply *back* or *0* for the main menu | *9* for a dedicated consultant.\n` +
     `Type *quote* at any time to request a quotation.`,
 
   CORPORATE_NEW_ORDER: () =>
