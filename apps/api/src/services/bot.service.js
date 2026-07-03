@@ -9,8 +9,6 @@ import { repeatOrder, createOrder, getStageProgress, getOrderById, recordDesignA
 import { submitPurchaseOrder } from './purchaseOrders.service.js';
 import { createTicket } from './tickets.service.js';
 import { getOrCreateClientByWhatsapp, updateClientProfile } from './clients.service.js';
-import { sendDocument } from './whatsapp.service.js';
-import { config } from '../config/index.js';
 import { isWithinBusinessHours } from '../utils/businessHours.js';
 import { logger } from '../utils/logger.js';
 
@@ -188,7 +186,7 @@ async function completeUniformIntake(quantityText, convo, client, R, updateState
   return R(TEMPLATES.UNIFORM_INTAKE_COMPLETE, { reference: order.reference });
 }
 
-// ── Generate PDF quotation and send it to the client ─────────────────────────
+// ── Log the quotation as a draft and notify client — consultant sends the PDF ──
 async function generateAndSendQuotation(consolidatedText, convo, client, phoneNumber, R, updateState) {
   const { quotation, unmatchedText } = await createFromFreeText(client.id, consolidatedText);
 
@@ -197,25 +195,12 @@ async function generateAndSendQuotation(consolidatedText, convo, client, phoneNu
     quotationFollowups: 0,
   });
 
-  // Draft quotations (unmatched items) never get a PDF — consultant prices them manually
-  if (quotation.status === 'draft') {
-    return R(TEMPLATES.QUOTATION_DRAFT_ACK, {
-      reference: quotation.reference,
-      unmatched: unmatchedText,
-    });
-  }
-
-  // All items matched — send the PDF
-  await sendDocument(phoneNumber, {
-    url: `${config.apiBaseUrl}/api/quotations/${quotation.id}/pdf`,
-    filename: `${quotation.reference}.pdf`,
-    caption: `Your quotation — Ref: ${quotation.reference}`,
+  // Always draft — consultant reviews in the dashboard and clicks "Price & Approve"
+  // which recalculates totals and sends the PDF to the client via WhatsApp.
+  return R(TEMPLATES.QUOTATION_DRAFT_ACK, {
+    reference: quotation.reference,
+    unmatched: unmatchedText,
   });
-
-  return R(() =>
-    `✅ Your quotation *${quotation.reference}* has been prepared and sent as a PDF.\n\n` +
-    `A consultant will be in touch to confirm details and discuss next steps. 😊`
-  );
 }
 
 // ── Multi-turn quotation gathering — AI asks follow-ups until enough info ─────

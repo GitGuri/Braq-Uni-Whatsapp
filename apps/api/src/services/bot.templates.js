@@ -234,11 +234,19 @@ export const TEMPLATES = {
     `• *What exactly is wrong* (e.g. wrong size, seam split, missing from parcel)\n\n` +
     `_Example: "The blue polo shirts I received are defective — the seams are split on 5 of the 20 pieces."_`,
 
-  QUOTATION_DRAFT_ACK: ({ reference, unmatched }) =>
-    `📋 *Quotation logged as draft — Ref: ${reference}*\n\n` +
-    `One or more items could not be matched to our product catalog:\n` +
-    unmatched.map(t => `• ${t}`).join('\n') +
-    `\n\nA consultant will price these items and send you the complete quotation shortly.`,
+  QUOTATION_DRAFT_ACK: ({ reference, unmatched = [] }) => {
+    const header = `📋 *Quotation received — Ref: ${reference}*\n\n`;
+    const unmatchedBlock = unmatched.length > 0
+      ? `Some items need to be checked and priced by our team:\n` +
+        unmatched.map(t => `• ${t}`).join('\n') + `\n\n`
+      : '';
+    return (
+      header +
+      unmatchedBlock +
+      `A consultant will review your quotation and send you a formal PDF within *4 business hours*.\n\n` +
+      `Reply *9* at any time to speak to a consultant directly.`
+    );
+  },
 
   // ── ORDER STAGES ───────────────────────────────────────────────────────────
   STAGE_1_QUOTATION_REQUESTED: ({ reference }) =>

@@ -92,12 +92,10 @@ export async function createFromFreeText(clientId, freeText) {
   const allItems  = [...lineItems, ...suggestedItems];
   const currency  = 'ZAR';
   const { subtotal, vatAmount, total } = calcTotals(allItems);
-  const status    = unmatchedDescriptions.length > 0 ? 'draft' : 'sent';
 
-  // SLA: remind client if draft is not approved within SLA_HOURS business hours
-  const slaRemindAt = status === 'draft'
-    ? new Date(Date.now() + SLA_HOURS * 60 * 60 * 1000)
-    : null;
+  // Always draft — consultant reviews and approves before PDF is sent to client.
+  const status      = 'draft';
+  const slaRemindAt = new Date(Date.now() + SLA_HOURS * 60 * 60 * 1000);
 
   const reference  = await nextQuotationNumber();
   const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
