@@ -8,5 +8,6 @@ export const quotationsRouter = express.Router();
 quotationsRouter.get('/:id/pdf', quotationsController.getPdf);
 
 quotationsRouter.use(requireAuth);
-quotationsRouter.get('/', quotationsController.list);
-quotationsRouter.get('/:id', quotationsController.getById);
+quotationsRouter.get('/',           quotationsController.list);
+quotationsRouter.get('/:id',        quotationsController.getById);
+quotationsRouter.post('/:id/approve', quotationsController.approve);

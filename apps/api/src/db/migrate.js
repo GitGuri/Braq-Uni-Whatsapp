@@ -366,6 +366,12 @@ const migrations = [
 
 `CREATE INDEX IF NOT EXISTS idx_school_catalog_school ON school_catalog(school_name)`,
 
+// ── 023: quotation approval workflow ─────────────────────────────────────────
+`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS sla_remind_at   TIMESTAMPTZ`,
+`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`,
+`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS approved_by     UUID REFERENCES staff(id) ON DELETE SET NULL`,
+`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS approved_at     TIMESTAMPTZ`,
+
 // ── 022: data-integrity flags (Phase 5) ──────────────────────────────────────
 // needs_review = true when a record fails validator checks.
 // Set by the backfill script and cleared by consultant action or re-validation.

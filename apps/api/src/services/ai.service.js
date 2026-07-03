@@ -117,6 +117,75 @@ export async function gatherQuotationInfo(history, { products }) {
   }
 }
 
+// ── Suggest ZAR prices for items that didn't match the product catalog ────────
+const PRICING_SUGGESTION_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    items: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          description: { type: 'STRING' },
+          quantity:    { type: 'INTEGER' },
+          unitPrice:   { type: 'NUMBER' },
+          sizes:       { type: 'STRING' },
+          branding:    { type: 'STRING' },
+          confidence:  { type: 'STRING', enum: ['high', 'medium', 'low'] },
+          notes:       { type: 'STRING' },
+        },
+        required: ['description', 'quantity', 'unitPrice', 'confidence'],
+      },
+    },
+  },
+  required: ['items'],
+};
+
+export async function suggestLineItemPricing(unmatchedDescriptions, { products, originalRequest }) {
+  const system =
+    `You are a pricing specialist for Braq Uni, a South African uniform manufacturer.\n` +
+    `Some items in a customer's quotation request could not be matched to our product catalog.\n` +
+    `Suggest a realistic ZAR price for each unmatched item.\n\n` +
+    `Pricing guidelines:\n` +
+    `• Base prices on similar catalog items (see reference list below)\n` +
+    `• Apply bulk discount logic: > 50 units = -5%, > 100 units = -10%, > 500 units = -15%\n` +
+    `• Add branding surcharge: embroidery +R15/unit, screen print +R12/unit, sublimation +R25/unit\n` +
+    `• Round to nearest R0.50\n` +
+    `• All prices in ZAR, numbers only (no R symbol in unitPrice field)\n\n` +
+    `Catalog reference (name: price):\n` +
+    products.map(p => `  ${p.name} (${p.category}): R ${Number(p.price).toFixed(2)}`).join('\n') +
+    `\n\nFor each item return:\n` +
+    `  description  — clean item name\n` +
+    `  quantity     — units ordered (extract from customer text)\n` +
+    `  unitPrice    — suggested price per unit in ZAR\n` +
+    `  sizes        — sizes or "TBC"\n` +
+    `  branding     — branding description or "None"\n` +
+    `  confidence   — "high" if near-identical catalog item, "medium" if similar, "low" if estimated\n` +
+    `  notes        — one-line reason for the price\n\n` +
+    `These are AI suggestions. A consultant will review and approve before the PDF is sent.`;
+
+  const userText =
+    `Full customer request:\n${originalRequest}\n\n` +
+    `Items to price:\n${unmatchedDescriptions.join('\n')}`;
+
+  try {
+    return await callGemini({ system, schema: PRICING_SUGGESTION_SCHEMA, userText });
+  } catch (err) {
+    logger.error('Gemini pricing suggestion failed', { error: err.message });
+    return {
+      items: unmatchedDescriptions.map((desc) => ({
+        description: desc,
+        quantity:    1,
+        unitPrice:   0,
+        sizes:       'TBC',
+        branding:    'TBC',
+        confidence:  'low',
+        notes:       'Manual pricing required — AI unavailable',
+      })),
+    };
+  }
+}
+
 // ── Parse a free-text quotation request against the catalog ──────────────────
 export async function parseQuotationRequest(freeText, { products }) {
   const system =

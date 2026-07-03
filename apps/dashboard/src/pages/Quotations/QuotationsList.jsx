@@ -1,9 +1,10 @@
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Card, Typography, Tag, Button, Tooltip, Badge } from 'antd'
-import { FilePdfOutlined, WarningOutlined } from '@ant-design/icons'
+import { FilePdfOutlined, WarningOutlined, DollarOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { listQuotations, getPdfUrl } from '../../api/quotations.js'
+import QuotationApproveModal from './QuotationApproveModal.jsx'
 
 const { Title, Text } = Typography
 
@@ -16,7 +17,7 @@ const STATUS_CONFIG = {
 }
 
 export default function QuotationsList() {
-  const navigate = useNavigate()
+  const [approveTarget, setApproveTarget] = useState(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['quotations'],
@@ -96,23 +97,35 @@ export default function QuotationsList() {
       render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(v).format('DD MMM YYYY')}</Text>,
     },
     {
-      title: 'PDF',
-      key: 'pdf',
+      title: 'Actions',
+      key: 'actions',
       render: (_, row) => {
         const isDraft = row.status === 'draft'
         return (
-          <Tooltip title={isDraft ? 'PDF unavailable — quotation needs manual pricing first' : 'Download PDF'}>
-            <Button
-              size="small"
-              icon={<FilePdfOutlined />}
-              href={isDraft ? undefined : getPdfUrl(row.id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              disabled={isDraft}
-            >
-              PDF
-            </Button>
-          </Tooltip>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {isDraft && (
+              <Button
+                size="small"
+                type="primary"
+                icon={<DollarOutlined />}
+                onClick={(e) => { e.stopPropagation(); setApproveTarget(row) }}
+              >
+                Price &amp; Approve
+              </Button>
+            )}
+            <Tooltip title={isDraft ? 'PDF unavailable — approve the quotation first' : 'Download PDF'}>
+              <Button
+                size="small"
+                icon={<FilePdfOutlined />}
+                href={isDraft ? undefined : getPdfUrl(row.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                disabled={isDraft}
+              >
+                PDF
+              </Button>
+            </Tooltip>
+          </div>
         )
       },
     },
@@ -132,6 +145,12 @@ export default function QuotationsList() {
           rowClassName={(row) => row.status === 'draft' ? 'row-draft' : ''}
         />
       </Card>
+
+      <QuotationApproveModal
+        quotation={approveTarget}
+        open={!!approveTarget}
+        onClose={() => setApproveTarget(null)}
+      />
     </div>
   )
 }

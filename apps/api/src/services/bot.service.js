@@ -50,6 +50,39 @@ function detectIntent(body) {
   return { type: 'freetext', value: body };
 }
 
+// ── SLA reminder: send WhatsApp update if a draft quotation is overdue ───────
+async function sendOverdueQuotationReminder(client, phoneNumber) {
+  const { rows } = await query(
+    `SELECT * FROM quotations
+     WHERE client_id      = $1
+       AND status         = 'draft'
+       AND sla_remind_at  <= NOW()
+       AND reminder_sent_at IS NULL
+     ORDER BY sla_remind_at ASC
+     LIMIT 1`,
+    [client.id]
+  );
+  if (!rows.length) return;
+
+  const q = rows[0];
+  await query(
+    `UPDATE quotations SET reminder_sent_at = NOW() WHERE id = $1`,
+    [q.id]
+  );
+
+  const firstName = client.name?.split(' ')[0] || 'there';
+  const msg =
+    `Hi *${firstName}*! 😊\n\n` +
+    `Just a quick update — your consultant is finalising your quotation ` +
+    `*(Ref: ${q.reference})* and will send it through to you shortly.\n\n` +
+    `We appreciate your patience! If you have any questions in the meantime, ` +
+    `reply *9* to speak to a consultant directly.`;
+
+  const msgId = await sendTextMessage(phoneNumber, msg);
+  logger.info('Sent overdue quotation reminder', { clientId: client.id, quotationId: q.id });
+  return msgId;
+}
+
 // ── Get or create open conversation ──────────────────────────────────────────
 async function getOrCreateConversation(clientId) {
   const existing = await query(
@@ -314,6 +347,11 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
   if (isNew && !isWithinBusinessHours()) {
     await R(TEMPLATES.OUTSIDE_HOURS_ACK);
   }
+
+  // Check if any draft quotation is overdue for a consultant-progress reminder
+  await sendOverdueQuotationReminder(client, phoneNumber).catch((err) =>
+    logger.warn('SLA reminder check failed (non-fatal)', { error: err.message })
+  );
 
   // ── Global overrides — fire in any state ─────────────────────────────────
   if (intent.type === 'main_menu') {
