@@ -55,6 +55,7 @@ export async function createFromFreeText(clientId, freeText) {
       price:     Number(product.price),
       quantity,
       lineTotal,
+      sizes:          item.sizes || null,
       aiSuggested:    false,
       priceConfirmed: true,
     });

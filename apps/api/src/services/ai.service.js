@@ -61,8 +61,10 @@ const QUOTATION_SCHEMA = {
       items: {
         type: 'OBJECT',
         properties: {
-          productId: { type: 'STRING' },
-          quantity: { type: 'INTEGER' },
+          productId:   { type: 'STRING' },
+          quantity:    { type: 'INTEGER' },
+          description: { type: 'STRING' },
+          sizes:       { type: 'STRING' },
         },
         required: ['productId', 'quantity'],
       },
@@ -90,14 +92,17 @@ export async function gatherQuotationInfo(history, { products }) {
   const system =
     `You are a quotation assistant for Braq Uni, a uniform manufacturer.\n` +
     `Review the conversation below and decide if you have enough information to generate a quotation.\n\n` +
-    `A complete quotation needs ALL of the following:\n` +
-    `• Item types (e.g. polo shirts, hoodies, jackets)\n` +
-    `• Quantities per item\n` +
-    `• Sizes needed (e.g. S/M/L/XL or age ranges like 5-6, 7-8)\n` +
-    `• Branding requirements (logo, embroidery, printing, or none)\n\n` +
-    `Colors are helpful but not mandatory — don't block on them.\n\n` +
-    `If information is missing, set status to "need_more_info" and ask ONE short, friendly follow-up question.\n` +
-    `If you have enough information, set status to "ready" and consolidate everything the customer said into a single structured "consolidatedRequest" string.\n\n` +
+    `A complete quotation needs:\n` +
+    `• Item types (e.g. polo shirts, hoodies, jackets) and quantities\n` +
+    `• Sizes (e.g. S/M/L/XL, age ranges) — at least "TBC" is acceptable\n` +
+    `• Branding (logo, embroidery, print, or none) — at least "TBC" is acceptable\n\n` +
+    `Colors are optional — do NOT block on missing colors.\n` +
+    `Do NOT block if sizes or branding is "TBC" — that is enough to proceed.\n\n` +
+    `If you genuinely cannot determine what garment types or quantities are needed, ` +
+    `set status to "need_more_info" and ask ONE short, friendly question.\n` +
+    `Otherwise set status to "ready" and write a clean "consolidatedRequest" that lists ` +
+    `ONLY the actual product items with their quantities and sizes. ` +
+    `Do NOT include greetings, filler words, or conversational phrases in consolidatedRequest.\n\n` +
     `Available product catalog:\n` +
     products.map(p => `${p.id} | ${p.name} | ${p.category} | sizes: ${JSON.stringify(p.sizes)}`).join('\n');
 
@@ -189,10 +194,17 @@ export async function suggestLineItemPricing(unmatchedDescriptions, { products, 
 // ── Parse a free-text quotation request against the catalog ──────────────────
 export async function parseQuotationRequest(freeText, { products }) {
   const system =
-    `You extract a quotation request into structured line items for Braq Uni, a uniform manufacturer.\n` +
-    `Match each item the customer describes to the closest product in the catalog below by its id, ` +
-    `and extract the requested quantity. If an item cannot be confidently matched to any catalog ` +
-    `product, put the original text describing it into "unmatchedText" instead of guessing a productId.\n\n` +
+    `You extract a quotation request into structured line items for Braq Uni, a uniform manufacturer.\n\n` +
+    `RULES:\n` +
+    `1. Match each GARMENT TYPE the customer describes to the closest product in the catalog by its id.\n` +
+    `2. Extract the requested quantity.\n` +
+    `3. Size/colour descriptors (e.g. "medium", "large", "black", "M/L/XL") are ATTRIBUTES of an item — ` +
+    `store them in the "sizes" field and NEVER put them in unmatchedText as standalone entries.\n` +
+    `4. unmatchedText is ONLY for garment types that cannot be matched to any catalog product ` +
+    `(e.g. "safety boots", "swim caps"). Each entry must be a full item description, never a bare word.\n` +
+    `5. Completely ignore conversational noise — greetings ("hello", "hi", "ok", "yes", "thanks") ` +
+    `and filler words are NOT items. Do not include them anywhere in the response.\n` +
+    `6. If the input contains no recognisable product descriptions, return empty arrays.\n\n` +
     `Product catalog (id | name | category | sizes):\n` +
     products.map(p => `${p.id} | ${p.name} | ${p.category} | ${JSON.stringify(p.sizes)}`).join('\n');
 

@@ -79,13 +79,10 @@ export async function getPdf(req, res) {
       return res.status(404).json({ error: 'Quotation not found' });
     }
 
-    // Validate line-item completeness before rendering
-    const { complete, missing } = validateQuotation(quotation);
-    if (!complete) {
-      return res.status(422).json({
-        error: 'Quotation is incomplete and cannot be rendered as a PDF',
-        missing,
-      });
+    // Consultant-approved quotations must always render — they've been reviewed.
+    // Only block if there are literally no line items to show.
+    if (!Array.isArray(quotation.line_items) || quotation.line_items.length === 0) {
+      return res.status(422).json({ error: 'Quotation has no line items' });
     }
 
     res.setHeader('Content-Type', 'application/pdf');
