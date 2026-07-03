@@ -2,13 +2,22 @@ import PDFDocument from 'pdfkit';
 import { query, withTransaction } from '../db/pool.js';
 import { listProducts } from './catalog.service.js';
 import { parseQuotationRequest, suggestLineItemPricing } from './ai.service.js';
-import { sendDocument } from './whatsapp.service.js';
-import { config } from '../config/index.js';
+import { sendDocument, uploadMedia } from './whatsapp.service.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
 
 const VAT_RATE   = 15.00;
-const SLA_HOURS  = 4; // Send client reminder if draft not approved within this window
+const SLA_HOURS  = 4;
+
+function pdfToBuffer(doc) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end',  () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    doc.end();
+  });
+}
 
 // ── Sequential per-year quotation numbering — BRQ-QT-2026-0012 ───────────────
 async function nextQuotationNumber() {
@@ -149,13 +158,20 @@ export async function approveQuotation(id, lineItems, staffId) {
   );
   const quotation = rows[0];
 
-  // Send PDF to client via WhatsApp
+  // Send PDF to client via WhatsApp — generate in-memory and upload directly
+  // so we are never dependent on a publicly accessible API_BASE_URL.
   const clientRow = await query('SELECT * FROM clients WHERE id = $1', [quotation.client_id]);
-  const client    = clientRow.rows[0];
-  if (client?.whatsapp_number) {
+  const clientData = clientRow.rows[0];
+  if (clientData?.whatsapp_number) {
     try {
-      await sendDocument(client.whatsapp_number, {
-        url:      `${config.apiBaseUrl}/api/quotations/${quotation.id}/pdf`,
+      const pdfDoc    = renderQuotationPdf(quotation, {
+        client_name:     clientData.name,
+        whatsapp_number: clientData.whatsapp_number,
+      });
+      const pdfBuffer = await pdfToBuffer(pdfDoc);
+      const mediaId   = await uploadMedia(pdfBuffer, `${quotation.reference}.pdf`);
+      await sendDocument(clientData.whatsapp_number, {
+        mediaId,
         filename: `${quotation.reference}.pdf`,
         caption:
           `✅ Your quotation is ready! 📄\n\n` +

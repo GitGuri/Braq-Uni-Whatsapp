@@ -60,16 +60,41 @@ export async function sendReaction(to, messageId, emoji) {
   }
 }
 
-// ── Send a document (e.g. quotation PDF) ─────────────────────────────────────
-export async function sendDocument(to, { url, filename, caption }) {
+// ── Upload a buffer to Meta's media store, returns a reusable media_id ───────
+export async function uploadMedia(buffer, filename, mimeType = 'application/pdf') {
+  const blob = new Blob([buffer], { type: mimeType });
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', blob, filename);
+
+  const res = await axios.post(
+    `https://graph.facebook.com/${config.meta.apiVersion}/${config.meta.phoneNumberId}/media`,
+    form,
+    {
+      headers: { Authorization: `Bearer ${config.meta.token}` },
+      timeout: 30000,
+    }
+  );
+  const mediaId = res.data?.id;
+  logger.info('Media uploaded to WhatsApp', { mediaId, filename });
+  return mediaId;
+}
+
+// ── Send a document — pass either url (link) or mediaId (pre-uploaded) ───────
+export async function sendDocument(to, { url, mediaId, filename, caption }) {
   try {
+    const documentField = mediaId
+      ? { id: mediaId, filename, caption }
+      : { link: url, filename, caption };
+
     const res = await client.post('/messages', {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to,
       type: 'document',
-      document: { link: url, filename, caption },
+      document: documentField,
     });
+    logger.info('WhatsApp document sent', { to, messageId: res.data?.messages?.[0]?.id });
     return res.data?.messages?.[0]?.id || null;
   } catch (err) {
     const detail = err.response?.data?.error || err.message;
