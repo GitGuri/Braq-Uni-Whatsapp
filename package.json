@@ -10,6 +10,7 @@
     "test": "npm run test --workspace=apps/api",
     "migrate": "npm run migrate --workspace=apps/api",
     "seed": "npm run seed --workspace=apps/api",
+    "seed:testing": "npm run seed:testing --workspace=apps/api",
     "dashboard": "npm run dev --workspace=apps/dashboard",
     "dashboard:build": "npm run build --workspace=apps/dashboard"
   },
