@@ -49,26 +49,34 @@ export async function createFromFreeText(clientId, freeText) {
   }
 
   const currency = lineItems.length
-    ? (productsById.get(lineItems[0].productId)?.currency || 'USD')
-    : 'USD';
+    ? (productsById.get(lineItems[0].productId)?.currency || 'ZAR')
+    : 'ZAR';
 
   const subtotal  = lineItems.reduce((sum, i) => sum + i.lineTotal, 0);
   const vatAmount = subtotal * (VAT_RATE / 100);
   const total     = subtotal + vatAmount;
 
+  // Quotations with unmatched items cannot be priced — save as draft for consultant review
+  const status = unmatchedText.length > 0 ? 'draft' : 'sent';
+
   const reference = await nextQuotationNumber();
   const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30-day validity window
   const { rows } = await query(
     `INSERT INTO quotations (reference, client_id, status, line_items, subtotal, vat_rate, vat_amount, total, currency, valid_until, sent_at)
-     VALUES ($1,$2,'sent',$3,$4,$5,$6,$7,$8,$9,NOW()) RETURNING *`,
-    [reference, clientId, JSON.stringify(lineItems), subtotal, VAT_RATE, vatAmount, total, currency, validUntil]
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW()) RETURNING *`,
+    [reference, clientId, status, JSON.stringify(lineItems), subtotal, VAT_RATE, vatAmount, total, currency, validUntil]
   );
 
   return { quotation: rows[0], unmatchedText };
 }
 
 export async function listQuotations() {
-  const { rows } = await query('SELECT * FROM quotations ORDER BY created_at DESC');
+  const { rows } = await query(`
+    SELECT q.*, c.name AS client_name, c.whatsapp_number AS client_wa
+    FROM quotations q
+    LEFT JOIN clients c ON q.client_id = c.id
+    ORDER BY q.created_at DESC
+  `);
   return rows;
 }
 

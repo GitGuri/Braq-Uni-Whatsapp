@@ -24,9 +24,13 @@ const RESUME_TEMPLATES = {
 function detectIntent(body) {
   const t = body.trim().toLowerCase();
 
-  // Menu digits
-  if (/^[1-7]$/.test(t))       return { type: 'menu', value: parseInt(t) };
+  // Universal navigation — work in any state
   if (t === '0' || t === 'menu' || t === 'main menu') return { type: 'main_menu' };
+  if (t === '9' || /^(speak to|talk to|connect me to|i need a) consultant/i.test(t))
+    return { type: 'consultant' };
+
+  // Menu digits
+  if (/^[1-7]$/.test(t)) return { type: 'menu', value: parseInt(t) };
 
   // Order reference pattern e.g. BRQ-20260624-5678
   if (/^brq-\d{8}-\d{4}$/i.test(t)) return { type: 'order_ref', value: t.toUpperCase() };
@@ -37,6 +41,8 @@ function detectIntent(body) {
   if (/hours?|open|trading/i.test(t))                return { type: 'keyword', value: 'hours' };
   if (/lay.?by|layby/i.test(t))                      return { type: 'keyword', value: 'layby' };
   if (/brand|embroider|print|sublim/i.test(t))       return { type: 'keyword', value: 'branding' };
+  if (/store info|where.*shop|where.*store|store location/i.test(t))
+    return { type: 'keyword', value: 'store' };
   if (/\bpurchase order\b|\bpo\b/i.test(t))          return { type: 'keyword', value: 'po' };
   if (/wrong item|defective|faulty|damaged|broken item|missing item|\bcomplaint\b/i.test(t))
     return { type: 'keyword', value: 'ticket' };
@@ -153,28 +159,25 @@ async function completeUniformIntake(quantityText, convo, client, R, updateState
 async function generateAndSendQuotation(consolidatedText, convo, client, phoneNumber, R, updateState) {
   const { quotation, unmatchedText } = await createFromFreeText(client.id, consolidatedText);
 
-  if (quotation.line_items.length) {
-    await sendDocument(phoneNumber, {
-      url: `${config.apiBaseUrl}/api/quotations/${quotation.id}/pdf`,
-      filename: `${quotation.reference}.pdf`,
-      caption: `Your quotation — Ref: ${quotation.reference}`,
-    });
-  }
-
   await updateState(convo.id, 'awaiting_consultant', {
     quotationHistory: null,
     quotationFollowups: 0,
   });
 
-  if (unmatchedText.length) {
-    return R(() =>
-      (quotation.line_items.length
-        ? `✅ Your quotation *${quotation.reference}* has been sent as a PDF.\n\n`
-        : ``) +
-      `A consultant will follow up to quote the following items manually:\n` +
-      unmatchedText.map(t => `• ${t}`).join('\n')
-    );
+  // Draft quotations (unmatched items) never get a PDF — consultant prices them manually
+  if (quotation.status === 'draft') {
+    return R(TEMPLATES.QUOTATION_DRAFT_ACK, {
+      reference: quotation.reference,
+      unmatched: unmatchedText,
+    });
   }
+
+  // All items matched — send the PDF
+  await sendDocument(phoneNumber, {
+    url: `${config.apiBaseUrl}/api/quotations/${quotation.id}/pdf`,
+    filename: `${quotation.reference}.pdf`,
+    caption: `Your quotation — Ref: ${quotation.reference}`,
+  });
 
   return R(() =>
     `✅ Your quotation *${quotation.reference}* has been prepared and sent as a PDF.\n\n` +
@@ -188,9 +191,10 @@ async function handleQuotationGathering(body, convo, client, phoneNumber, R, upd
   history.push({ role: 'client', text: body });
 
   const followupsAsked = convo.context.quotationFollowups || 0;
+  const MAX_FOLLOWUPS  = 5; // AI drives the conversation; this is a hard safety ceiling
   const products = await listProducts({});
 
-  if (followupsAsked < 3) {
+  if (followupsAsked < MAX_FOLLOWUPS) {
     const result = await gatherQuotationInfo(history, { products });
 
     if (result.status === 'need_more_info' && result.question) {
@@ -207,7 +211,7 @@ async function handleQuotationGathering(body, convo, client, phoneNumber, R, upd
     return generateAndSendQuotation(consolidated, convo, client, phoneNumber, R, updateState);
   }
 
-  // Max follow-ups reached — generate with everything gathered so far
+  // Safety ceiling reached — generate with everything gathered so far
   const consolidated = history.filter(h => h.role === 'client').map(h => h.text).join('\n');
   return generateAndSendQuotation(consolidated, convo, client, phoneNumber, R, updateState);
 }
@@ -311,10 +315,15 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     await R(TEMPLATES.OUTSIDE_HOURS_ACK);
   }
 
-  // ── Global overrides ─────────────────────────────────────────────────────
+  // ── Global overrides — fire in any state ─────────────────────────────────
   if (intent.type === 'main_menu') {
     await updateState(convo.id, 'main_menu');
     return R(TEMPLATES.MAIN_MENU);
+  }
+
+  if (intent.type === 'consultant') {
+    await updateState(convo.id, 'awaiting_consultant');
+    return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
   }
 
   if (intent.type === 'order_ref' && state === 'corporate_repeat_order') {
@@ -342,6 +351,7 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     if (intent.value === 'hours') return R(TEMPLATES.RETAIL_HOURS);
     if (intent.value === 'layby') return R(TEMPLATES.RETAIL_LAYBY);
     if (intent.value === 'branding') return R(TEMPLATES.BRANDING_INFO);
+    if (intent.value === 'store')   return R(TEMPLATES.STORE_INFO);
     if (intent.value === 'quote') {
       return gateOrProceed(client, convo, 'quotation_requested', R, updateState, async () => {
         await updateState(convo.id, 'quotation_requested');
@@ -464,14 +474,19 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
       return R(TEMPLATES.TICKET_ASK_DESCRIPTION);
     }
 
-    case 'ticket_description':
+    case 'ticket_description': {
+      const description = body.trim();
+      if (description.length < 30) {
+        return R(TEMPLATES.TICKET_NEEDS_MORE_DETAIL);
+      }
       await createTicket({
         clientId: client.id,
         category: convo.context.ticketCategory || 'other',
-        description: body,
+        description,
       });
       await updateState(convo.id, 'awaiting_consultant');
       return R(TEMPLATES.TICKET_LOGGED);
+    }
 
     case 'registration_name':
       await updateClientProfile(client.id, { name: body });
@@ -520,10 +535,6 @@ async function handleMainMenuSelection(option, phone, convo, client, R, updateSt
       await updateState(convo.id, 'retail_collection');
       return R(TEMPLATES.RETAIL_COLLECTION_ASK);
     case 5:
-      return R(TEMPLATES.BRANDING_INFO);
-    case 6:
-      return R(TEMPLATES.STORE_INFO);
-    case 7:
       await updateState(convo.id, 'awaiting_consultant');
       return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
     default:
@@ -535,13 +546,11 @@ async function handleMainMenuSelection(option, phone, convo, client, R, updateSt
 async function handleRetailMenuSelection(option, phone, convo, client, R, updateState) {
   switch (option) {
     case 1: {
-      // Show full product list with prices immediately — no registration gate needed
       const products = await listProducts({ clientType: 'retail' });
       await updateState(convo.id, 'retail_menu');
       return R(TEMPLATES.RETAIL_PRODUCT_LIST, { products });
     }
     case 2: {
-      // Show list of schools we carry uniforms for
       const schools = await listDistinctSchools();
       if (!schools.length) {
         await updateState(convo.id, 'awaiting_consultant');
@@ -558,9 +567,6 @@ async function handleRetailMenuSelection(option, phone, convo, client, R, update
     case 5:
       await updateState(convo.id, 'retail_layby');
       return R(TEMPLATES.RETAIL_LAYBY);
-    case 6:
-      await updateState(convo.id, 'awaiting_consultant');
-      return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
     default:
       return R(TEMPLATES.UNKNOWN_INTENT);
   }
@@ -569,26 +575,23 @@ async function handleRetailMenuSelection(option, phone, convo, client, R, update
 // ── Corporate menu selection handler ──────────────────────────────────────────
 async function handleCorporateMenuSelection(option, phone, convo, client, R, updateState) {
   switch (option) {
-    case 1: // Repeat previous order
+    case 1:
       await updateState(convo.id, 'corporate_repeat_order');
       return R(TEMPLATES.CORPORATE_REPEAT_ORDER_ASK);
-    case 2: // New uniform development
+    case 2:
       return gateOrProceed(client, convo, 'corporate_uniform_garment', R, updateState, async () => {
         await updateState(convo.id, 'corporate_uniform_garment');
         return R(TEMPLATES.UNIFORM_INTAKE_GARMENT);
       });
-    case 3: // Manufacturing updates
+    case 3:
       await updateState(convo.id, 'corporate_manufacturing_update');
       return R(TEMPLATES.CORPORATE_MANUFACTURING_ASK);
-    case 4: // Delivery schedule
+    case 4:
       await updateState(convo.id, 'corporate_delivery_schedule');
       return R(TEMPLATES.CORPORATE_DELIVERY_ASK);
-    case 5: // Account queries
+    case 5:
       await updateState(convo.id, 'awaiting_consultant');
       return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
-    case 6: // Dedicated consultant support
-      await updateState(convo.id, 'awaiting_consultant');
-      return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a dedicated consultant' });
     default:
       return R(TEMPLATES.UNKNOWN_INTENT);
   }

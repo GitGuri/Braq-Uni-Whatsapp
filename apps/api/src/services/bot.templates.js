@@ -8,15 +8,14 @@ export const TEMPLATES = {
   // ── WELCOME ────────────────────────────────────────────────────────────────
   MAIN_MENU: () =>
     `Welcome to *Braq Uni* — Your Uniform Stylist. 👋\n\n` +
-    `*Braq Connect™* is your direct link to our manufacturing, retail, branding, and customer support services.\n\n` +
+    `*Braq Connect™* is your direct link to our manufacturing, retail, branding, and support services.\n\n` +
     `Please select an option:\n\n` +
-    `1️⃣  Retail customer\n` +
-    `2️⃣  School / corporate / bulk orders\n` +
+    `1️⃣  Shop / retail\n` +
+    `2️⃣  Corporate & bulk orders\n` +
     `3️⃣  Request a quotation\n` +
-    `4️⃣  Order tracking\n` +
-    `5️⃣  Branding & embroidery\n` +
-    `6️⃣  Store information\n` +
-    `7️⃣  Speak to a consultant`,
+    `4️⃣  Track my order\n` +
+    `5️⃣  Speak to a consultant\n\n` +
+    `💡 You can type *hours*, *branding*, *store*, or *po* at any time.`,
 
   // ── BUSINESS HOURS ─────────────────────────────────────────────────────────
   OUTSIDE_HOURS_ACK: () =>
@@ -32,9 +31,8 @@ export const TEMPLATES = {
     `2️⃣  School uniform information\n` +
     `3️⃣  Store trading hours\n` +
     `4️⃣  Collection status\n` +
-    `5️⃣  Lay-by information\n` +
-    `6️⃣  Speak to a consultant\n\n` +
-    `Reply *0* at any time to return to the main menu.`,
+    `5️⃣  Lay-by information\n\n` +
+    `Reply *0* for the main menu | *9* to speak to a consultant.`,
 
   RETAIL_PRODUCT_LIST: ({ products }) => {
     if (!products || !products.length) {
@@ -122,11 +120,11 @@ export const TEMPLATES = {
     `Please select an option:\n\n` +
     `1️⃣  Repeat previous order\n` +
     `2️⃣  New uniform development\n` +
-    `3️⃣  Manufacturing updates\n` +
+    `3️⃣  Manufacturing update\n` +
     `4️⃣  Delivery schedule\n` +
-    `5️⃣  Account queries\n` +
-    `6️⃣  Dedicated consultant support\n\n` +
-    `To request a quotation, reply *3* on the main menu or type *quote* at any time.`,
+    `5️⃣  Account queries\n\n` +
+    `Reply *0* for the main menu | *9* for a dedicated consultant.\n` +
+    `Type *quote* at any time to request a quotation.`,
 
   CORPORATE_NEW_ORDER: () =>
     `Please describe what you need — garment type, quantity, branding requirements, and your preferred timeline — and we'll prepare a quotation for you.`,
@@ -230,6 +228,18 @@ export const TEMPLATES = {
   TICKET_LOGGED: () =>
     `Thank you for letting us know. 🎫 Your issue has been logged and a consultant will follow up with you shortly.`,
 
+  TICKET_NEEDS_MORE_DETAIL: () =>
+    `That description is a bit brief. Please include:\n\n` +
+    `• *Which item* has the issue (e.g. blue polo shirt, size L)\n` +
+    `• *What exactly is wrong* (e.g. wrong size, seam split, missing from parcel)\n\n` +
+    `_Example: "The blue polo shirts I received are defective — the seams are split on 5 of the 20 pieces."_`,
+
+  QUOTATION_DRAFT_ACK: ({ reference, unmatched }) =>
+    `📋 *Quotation logged as draft — Ref: ${reference}*\n\n` +
+    `One or more items could not be matched to our product catalog:\n` +
+    unmatched.map(t => `• ${t}`).join('\n') +
+    `\n\nA consultant will price these items and send you the complete quotation shortly.`,
+
   // ── ORDER STAGES ───────────────────────────────────────────────────────────
   STAGE_1_QUOTATION_REQUESTED: ({ reference }) =>
     `Thank you for your enquiry. 📋\n\n` +
@@ -317,13 +327,15 @@ export const TEMPLATES = {
 
   STORE_INFO: () =>
     `📍 *Braq Uni — Store Information*\n\n` +
-    `Address: [Your store address here]\n\n` +
+    `*Main Store:*\n` +
+    `Corner Leeuwkop Rd & Rivonia Blvd, Sunninghill, Sandton\n\n` +
     `🕐 *Trading Hours*\n` +
     `Mon – Fri: 8:00 AM – 5:00 PM\n` +
     `Saturday:  8:00 AM – 1:00 PM\n` +
     `Sunday & Public Holidays: Closed\n\n` +
-    `📞 [Your phone number]\n` +
-    `📧 [Your email address]`,
+    `📞 011 234 5678\n` +
+    `📧 info@braquni.com\n\n` +
+    `Reply *0* to return to the main menu.`,
 };
 
 // ── Stage label helper ────────────────────────────────────────────────────────

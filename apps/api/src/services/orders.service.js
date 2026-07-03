@@ -38,16 +38,18 @@ function generateRef() {
 }
 
 // ── List orders with pagination and filters ──────────────────────────────────
-export async function listOrders({ stage, clientType, staffId, urgent, page = 1, limit = 20 }) {
+export async function listOrders({ stage, clientType, staffId, urgent, isDelayed, active, page = 1, limit = 20 }) {
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let where = ['1=1'];
   const params = [];
 
-  if (stage)      { params.push(stage);      where.push(`o.stage = $${params.length}`); }
-  if (clientType) { params.push(clientType); where.push(`o.client_type = $${params.length}`); }
-  if (staffId)    { params.push(staffId);    where.push(`o.assigned_staff_id = $${params.length}`); }
-  if (urgent === 'true') where.push('o.is_urgent = true');
+  if (stage)                           { params.push(stage);      where.push(`o.stage = $${params.length}`); }
+  if (clientType)                      { params.push(clientType); where.push(`o.client_type = $${params.length}`); }
+  if (staffId)                         { params.push(staffId);    where.push(`o.assigned_staff_id = $${params.length}`); }
+  if (urgent === 'true')               where.push('o.is_urgent = true');
+  if (isDelayed === 'true' || isDelayed === true) where.push('o.is_delayed = true');
+  if (active === 'true'   || active === true)     where.push(`o.stage NOT IN ('completed','cancelled')`);
 
   params.push(parseInt(limit)); params.push(offset);
 

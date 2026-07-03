@@ -2,6 +2,9 @@ import { z } from 'zod';
 import * as ordersService from '../services/orders.service.js';
 import * as paymentsService from '../services/payments.service.js';
 import * as sizesService from '../services/sizes.service.js';
+import * as quotationsService from '../services/quotations.service.js';
+import { getClientById } from '../services/clients.service.js';
+import { validateOrder } from '../validators/index.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
 
@@ -50,7 +53,20 @@ export async function getById(req, res) {
   try {
     const result = await ordersService.getOrderById(req.params.id);
     const { percent } = ordersService.getStageProgress(result.order.stage);
-    res.json({ ...result, progressPercent: percent });
+
+    const [sizeEntries, { client }] = await Promise.all([
+      sizesService.listSizeEntries(req.params.id),
+      getClientById(result.order.client_id),
+    ]);
+
+    let quotation = null;
+    if (result.order.quotation_id) {
+      try { quotation = await quotationsService.getQuotationById(result.order.quotation_id); } catch { /* ok */ }
+    }
+
+    const validation = validateOrder(result.order, { sizeEntries, quotation, client });
+
+    res.json({ ...result, progressPercent: percent, validation });
   } catch (err) {
     handleError(res, err, 'Failed to fetch order');
   }
@@ -75,11 +91,34 @@ export async function advance(req, res) {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const { order, from, to } = await ordersService.advanceOrderStage(req.params.id, req.staff.id, parsed.data);
+    // Load full context required by the validator
+    const { order } = await ordersService.getOrderById(req.params.id);
+
+    let quotation = null;
+    if (order.quotation_id) {
+      quotation = await quotationsService.getQuotationById(order.quotation_id);
+    }
+
+    const [sizeEntries, { client }] = await Promise.all([
+      sizesService.listSizeEntries(req.params.id),
+      getClientById(order.client_id),
+    ]);
+
+    const { canAdvance, missing } = validateOrder(order, { sizeEntries, quotation, client });
+    if (!canAdvance) {
+      return res.status(422).json({
+        error: 'Order cannot advance until the following are resolved',
+        missing,
+      });
+    }
+
+    const { order: updatedOrder, from, to } = await ordersService.advanceOrderStage(
+      req.params.id, req.staff.id, parsed.data,
+    );
     logger.info('Order stage advanced', {
-      orderId: req.params.id, reference: order.reference, from, to, by: req.staff.email,
+      orderId: req.params.id, reference: updatedOrder.reference, from, to, by: req.staff.email,
     });
-    res.json({ order, from, to });
+    res.json({ order: updatedOrder, from, to });
   } catch (err) {
     handleError(res, err, 'Failed to advance order stage');
   }

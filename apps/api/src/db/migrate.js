@@ -366,6 +366,23 @@ const migrations = [
 
 `CREATE INDEX IF NOT EXISTS idx_school_catalog_school ON school_catalog(school_name)`,
 
+// ── 022: data-integrity flags (Phase 5) ──────────────────────────────────────
+// needs_review = true when a record fails validator checks.
+// Set by the backfill script and cleared by consultant action or re-validation.
+`ALTER TABLE orders     ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false`,
+`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false`,
+
+// delivery_preference: explicit column replacing the derived check across
+// preferred_store_location / physical_address used in Phase 1–4 validators.
+`ALTER TABLE clients ADD COLUMN IF NOT EXISTS delivery_preference VARCHAR(20)`,
+
+// sizes_tbc_by: lets consultants defer the sizing roster to a future date
+// rather than blocking the stage-advance gate immediately.
+`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sizes_tbc_by DATE`,
+
+`CREATE INDEX IF NOT EXISTS idx_orders_needs_review      ON orders(needs_review)     WHERE needs_review = true`,
+`CREATE INDEX IF NOT EXISTS idx_quotations_needs_review  ON quotations(needs_review) WHERE needs_review = true`,
+
 // ── 018: updated_at auto-trigger ─────────────────────────────────────────────
 `CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$

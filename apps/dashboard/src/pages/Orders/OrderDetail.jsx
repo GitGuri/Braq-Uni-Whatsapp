@@ -8,7 +8,8 @@ import {
 } from 'antd'
 import {
   ArrowRightOutlined, ClockCircleOutlined, DollarOutlined,
-  UploadOutlined, ArrowLeftOutlined, UserOutlined,
+  UploadOutlined, ArrowLeftOutlined, UserOutlined, WarningOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
@@ -57,10 +58,25 @@ export default function OrderDetail() {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['order', id] })
 
+  const [advanceError, setAdvanceError] = useState(null)
+
   const advanceMutation = useMutation({
     mutationFn: (values) => advanceStage(id, values),
-    onSuccess: () => { message.success('Stage advanced'); setAdvanceOpen(false); advanceForm.resetFields(); invalidate() },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Failed to advance stage'),
+    onSuccess: () => {
+      message.success('Stage advanced')
+      setAdvanceOpen(false)
+      setAdvanceError(null)
+      advanceForm.resetFields()
+      invalidate()
+    },
+    onError: (err) => {
+      const resp = err.response?.data
+      if (resp?.missing?.length) {
+        setAdvanceError(resp)
+      } else {
+        message.error(resp?.error ?? 'Failed to advance stage')
+      }
+    },
   })
 
   const delayMutation = useMutation({
@@ -99,23 +115,24 @@ export default function OrderDetail() {
   if (isLoading) return <Spin size="large" style={{ display: 'block', marginTop: 80 }} />
   if (error) return <Alert type="error" message="Failed to load order" />
 
-  const { order, stageHistory } = data
+  const { order, history: stageHistory, validation } = data
   const payments = paymentsData?.payments ?? []
   const sizes = sizesData?.entries ?? []
   const staffList = staffData?.staff ?? []
+  const requirementsMet = validation?.canAdvance !== false
+  const requirementsMissing = validation?.missing ?? []
 
   const paymentColumns = [
-    { title: 'Type', dataIndex: 'type', render: (v) => <Tag>{v}</Tag> },
-    { title: 'Amount', dataIndex: 'amount', render: (v) => `R ${Number(v).toFixed(2)}` },
-    { title: 'Notes', dataIndex: 'notes' },
-    { title: 'Date', dataIndex: 'created_at', render: (v) => dayjs(v).format('DD MMM YYYY') },
+    { title: 'Type', dataIndex: 'payment_type', render: (v) => <Tag color="blue">{v}</Tag> },
+    { title: 'Amount', dataIndex: 'amount', render: (v) => <Text strong>R {Number(v).toFixed(2)}</Text> },
+    { title: 'Notes', dataIndex: 'notes', render: (v) => v ?? '—' },
+    { title: 'Date', dataIndex: 'received_at', render: (v) => dayjs(v).format('DD MMM YYYY') },
   ]
 
   const sizeColumns = [
-    { title: 'Size', dataIndex: 'size' },
-    { title: 'Qty', dataIndex: 'quantity' },
-    { title: 'Gender', dataIndex: 'gender' },
-    { title: 'Product', dataIndex: 'product_name' },
+    { title: 'Name', dataIndex: 'person_name' },
+    { title: 'Size', dataIndex: 'size', render: (v) => <Tag>{v}</Tag> },
+    { title: 'Notes', dataIndex: 'notes', render: (v) => v ?? '—' },
   ]
 
   return (
@@ -150,19 +167,47 @@ export default function OrderDetail() {
             </Button>
             <Button
               type="primary"
-              onClick={() => setAdvanceOpen(true)}
-              icon={<ArrowRightOutlined />}
+              onClick={() => { setAdvanceError(null); setAdvanceOpen(true) }}
+              icon={requirementsMet ? <ArrowRightOutlined /> : <WarningOutlined />}
               disabled={order.stage === 'completed'}
+              danger={!requirementsMet && order.stage !== 'quotation_requested'}
             >
-              Advance Stage
+              {requirementsMet ? 'Advance Stage' : 'Advance Stage (blocked)'}
             </Button>
           </Space>
         }
         style={{ marginBottom: 16 }}
       >
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 16 }}>
           <OrderProgress stage={order.stage} />
         </div>
+
+        {/* Requirements panel — shown when the advance gate is not yet met */}
+        {!requirementsMet && requirementsMissing.length > 0 && (
+          <Alert
+            type="warning"
+            icon={<WarningOutlined />}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Stage advance blocked — resolve the following first"
+            description={
+              <ul style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
+                {requirementsMissing.map((m, i) => (
+                  <li key={i} style={{ fontSize: 13 }}>{m}</li>
+                ))}
+              </ul>
+            }
+          />
+        )}
+        {requirementsMet && order.stage !== 'completed' && order.stage !== 'quotation_requested' && (
+          <Alert
+            type="success"
+            icon={<CheckCircleOutlined />}
+            showIcon
+            message="All requirements met — ready to advance"
+            style={{ marginBottom: 16 }}
+          />
+        )}
 
         <Descriptions bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
           <Descriptions.Item label="Client">{order.client_name ?? '—'}</Descriptions.Item>
@@ -261,9 +306,22 @@ export default function OrderDetail() {
       <Modal
         title="Advance to Next Stage"
         open={advanceOpen}
-        onCancel={() => setAdvanceOpen(false)}
+        onCancel={() => { setAdvanceOpen(false); setAdvanceError(null) }}
         footer={null}
       >
+        {advanceError && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={advanceError.error}
+            description={
+              <ul style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
+                {advanceError.missing.map((m, i) => <li key={i} style={{ fontSize: 13 }}>{m}</li>)}
+              </ul>
+            }
+          />
+        )}
         <Form form={advanceForm} layout="vertical" onFinish={(v) => advanceMutation.mutate(v)}>
           <Form.Item name="notes" label="Notes (optional)">
             <Input.TextArea rows={2} />

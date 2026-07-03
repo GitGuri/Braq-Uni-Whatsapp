@@ -1,4 +1,5 @@
 import * as quotationsService from '../services/quotations.service.js';
+import { validateQuotation } from '../validators/index.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
 
@@ -30,7 +31,20 @@ export async function getById(req, res) {
 export async function getPdf(req, res) {
   try {
     const quotation = await quotationsService.getQuotationById(req.params.id);
-    if (quotation.status === 'draft') return res.status(404).json({ error: 'Quotation not found' });
+
+    // Draft quotations are not client-facing — treat as not found
+    if (quotation.status === 'draft') {
+      return res.status(404).json({ error: 'Quotation not found' });
+    }
+
+    // Validate line-item completeness before rendering
+    const { complete, missing } = validateQuotation(quotation);
+    if (!complete) {
+      return res.status(422).json({
+        error: 'Quotation is incomplete and cannot be rendered as a PDF',
+        missing,
+      });
+    }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${quotation.reference}.pdf"`);

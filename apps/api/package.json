@@ -12,6 +12,7 @@
     "seed": "node src/db/seed.js",
     "seed:catalog": "node src/db/seed-catalog.js",
     "seed:testing": "node src/db/seed-testing.js",
+    "backfill": "node src/db/backfill-needs-review.js",
     "test": "node --test"
   },
   "dependencies": {

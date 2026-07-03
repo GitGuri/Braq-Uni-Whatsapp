@@ -54,18 +54,21 @@ export default function DashboardLayout() {
   const NAV_ITEMS = [
     { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
     { key: '/inbox', icon: <MessageOutlined />, label: <InboxLabel collapsed={collapsed} waiting={waiting} /> },
+    { type: 'divider' },
     { key: '/orders', icon: <ShoppingCartOutlined />, label: 'Orders' },
-    { key: '/clients', icon: <TeamOutlined />, label: 'Clients' },
     { key: '/quotations', icon: <FileTextOutlined />, label: 'Quotations' },
-    { key: '/products', icon: <AppstoreOutlined />, label: 'Products' },
     { key: '/purchase-orders', icon: <FileProtectOutlined />, label: 'Purchase Orders' },
+    { type: 'divider' },
+    { key: '/clients', icon: <TeamOutlined />, label: 'Clients' },
     { key: '/tickets', icon: <CustomerServiceOutlined />, label: 'Tickets' },
     { key: '/broadcasts', icon: <NotificationOutlined />, label: 'Broadcasts' },
+    { type: 'divider' },
+    { key: '/products', icon: <AppstoreOutlined />, label: 'Products' },
     { key: '/school-catalog', icon: <BookOutlined />, label: 'School Catalog' },
   ]
 
-  const selectedKey = NAV_ITEMS.find(
-    (item) => item.key !== '/' && location.pathname.startsWith(item.key)
+  const selectedKey = NAV_ITEMS.filter(i => i.key && i.key !== '/').find(
+    (item) => location.pathname.startsWith(item.key)
   )?.key ?? '/'
 
   const userMenu = {

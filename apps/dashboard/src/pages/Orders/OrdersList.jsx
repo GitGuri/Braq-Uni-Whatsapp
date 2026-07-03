@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Table, Card, Typography, Select, Input, Button, Tag, Space, Row, Col,
 } from 'antd'
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
+import { PlusOutlined, WarningOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { listOrders } from '../../api/orders.js'
 import StageTag, { STAGES, stageLabel } from '../../components/StageTag.jsx'
@@ -47,7 +47,20 @@ export default function OrdersList() {
       title: 'Stage',
       dataIndex: 'stage',
       key: 'stage',
-      render: (stage) => <StageTag stage={stage} />,
+      render: (stage) => (
+        <Space size={4}>
+          <StageTag stage={stage} />
+          {stage === 'quotation_submitted' && (
+            <Tag
+              icon={<WarningOutlined />}
+              color="warning"
+              style={{ fontSize: 11, padding: '0 4px' }}
+            >
+              Gate
+            </Tag>
+          )}
+        </Space>
+      ),
     },
     {
       title: 'Flags',
