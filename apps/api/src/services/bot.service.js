@@ -343,7 +343,19 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
   }
 
   // ── Keyword shortcuts ─────────────────────────────────────────────────────
-  if (intent.type === 'keyword') {
+  // Disabled during active data-collection states — the user's free text is
+  // content, not a navigation command (e.g. "embroidered" in a quotation
+  // description must not trigger the branding shortcut).
+  const DATA_COLLECTION_STATES = new Set([
+    'quotation_requested',
+    'ticket_description',
+    'registration_name', 'registration_org_or_school', 'registration_address',
+    'corporate_uniform_garment', 'corporate_uniform_sizes',
+    'corporate_uniform_branding', 'corporate_uniform_quantity',
+    'corporate_po_quotation_ref', 'corporate_po_number',
+  ]);
+
+  if (intent.type === 'keyword' && !DATA_COLLECTION_STATES.has(state)) {
     if (intent.value === 'track') {
       await updateState(convo.id, 'retail_collection');
       return R(TEMPLATES.RETAIL_COLLECTION_ASK);
