@@ -1,31 +1,16 @@
 import { Tag } from 'antd'
 
-export const STAGES = [
-  'quotation_requested',
-  'quotation_submitted',
-  'purchase_order_received',
-  'design_approval_pending',
-  'materials_procurement',
-  'production_scheduled',
-  'manufacturing',
-  'branding_embroidery',
-  'quality_control',
-  'packing_dispatch',
-  'completed',
-]
-
 const STAGE_CONFIG = {
-  quotation_requested:   { label: 'Quotation Requested',   color: 'blue' },
-  quotation_submitted:   { label: 'Quotation Submitted',   color: 'cyan' },
-  purchase_order_received: { label: 'PO Received',         color: 'geekblue' },
-  design_approval_pending: { label: 'Design Approval',     color: 'orange' },
-  materials_procurement: { label: 'Materials Procurement', color: 'purple' },
-  production_scheduled:  { label: 'Production Scheduled',  color: 'volcano' },
-  manufacturing:         { label: 'Manufacturing',          color: 'magenta' },
-  branding_embroidery:   { label: 'Branding/Embroidery',   color: 'gold' },
-  quality_control:       { label: 'Quality Control',       color: 'lime' },
-  packing_dispatch:      { label: 'Packing & Dispatch',    color: 'green' },
-  completed:             { label: 'Completed',             color: 'success' },
+  quotation_requested:   { label: 'Quotation Requested',   color: 'default' },
+  quotation_submitted:   { label: 'Quotation Submitted',   color: 'blue' },
+  po_received:           { label: 'PO Received',           color: 'cyan' },
+  materials_procurement: { label: 'Materials Procurement', color: 'geekblue' },
+  production_scheduled:  { label: 'Production Scheduled',  color: 'purple' },
+  manufacturing:         { label: 'Manufacturing',         color: 'magenta' },
+  branding_embroidery:   { label: 'Branding & Embroidery', color: 'volcano' },
+  quality_control:       { label: 'Quality Control',       color: 'orange' },
+  packing_dispatch:      { label: 'Packing & Dispatch',    color: 'gold' },
+  completed:             { label: 'Completed',             color: 'green' },
 }
 
 export function stageLabel(stage) {

@@ -25,10 +25,11 @@ const STATUS_COLORS = {
 }
 
 const CATEGORY_LABELS = {
-  wrong_item:   'Wrong item received',
-  defective:    'Defective item',
-  missing_item: 'Missing item',
-  other:        'Other',
+  wrong_item:    'Wrong item received',
+  defective:     'Defective item',
+  missing_item:  'Missing item',
+  account_query: 'Account Query',
+  other:         'Other',
 }
 
 export default function TicketDetail() {

@@ -1,167 +1,154 @@
 import { query, withTransaction } from '../db/pool.js';
 import { sendTextMessage } from './whatsapp.service.js';
-import { TEMPLATES, templateForStage } from './bot.templates.js';
+import { TEMPLATES, STAGE_ORDER, templateForStage, nextStage } from './bot.templates.js';
 import { HttpError } from '../utils/httpError.js';
+import { logger } from '../utils/logger.js';
 
-const STAGE_ORDER = [
-  'quotation_requested',
-  'quotation_submitted',
-  'purchase_order_received',
-  'design_approval_pending',
-  'materials_procurement',
-  'production_scheduled',
-  'manufacturing',
-  'branding_embroidery',
-  'quality_control',
-  'packing_dispatch',
-  'completed',
-];
-
-function nextStage(current) {
-  const idx = STAGE_ORDER.indexOf(current);
-  return idx >= 0 && idx < STAGE_ORDER.length - 1 ? STAGE_ORDER[idx + 1] : null;
+// ── Daily-resetting order reference — BRQ-O-YYYYMMDD-XXXX ───────────────────
+async function nextOrderRef() {
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return withTransaction(async (tx) => {
+    const { rows } = await tx.query(
+      `INSERT INTO sequence_counters (key, date_key, value)
+       VALUES ('order', $1, 1)
+       ON CONFLICT (key, date_key) DO UPDATE SET value = sequence_counters.value + 1
+       RETURNING value`,
+      [today]
+    );
+    return `BRQ-O-${today}-${String(rows[0].value).padStart(4, '0')}`;
+  });
 }
 
-// ── Stage progress, e.g. for "Track Order" replies ────────────────────────────
-export function getStageProgress(stage) {
-  const idx = STAGE_ORDER.indexOf(stage);
-  if (idx < 0) return { index: null, total: STAGE_ORDER.length, percent: null };
-  const percent = Math.round(((idx + 1) / STAGE_ORDER.length) * 100);
-  return { index: idx, total: STAGE_ORDER.length, percent };
+function buildStageFilter(value) {
+  return STAGE_ORDER.includes(value) ? value : null;
 }
 
-function generateRef() {
-  const date = new Date();
-  const ymd  = date.toISOString().slice(0, 10).replace(/-/g, '');
-  const rand = Math.floor(Math.random() * 9000) + 1000;
-  return `BRQ-${ymd}-${rand}`;
-}
-
-// ── List orders with pagination and filters ──────────────────────────────────
-export async function listOrders({ stage, clientType, staffId, urgent, isDelayed, active, page = 1, limit = 20 }) {
+// ── List orders ───────────────────────────────────────────────────────────────
+export async function listOrders({ stage, clientType, staffId, onHold, active, page = 1, limit = 20 } = {}) {
   const offset = (parseInt(page) - 1) * parseInt(limit);
-
-  let where = ['1=1'];
+  const where = ['1=1'];
   const params = [];
 
-  if (stage)                           { params.push(stage);      where.push(`o.stage = $${params.length}`); }
-  if (clientType)                      { params.push(clientType); where.push(`o.client_type = $${params.length}`); }
-  if (staffId)                         { params.push(staffId);    where.push(`o.assigned_staff_id = $${params.length}`); }
-  if (urgent === 'true')               where.push('o.is_urgent = true');
-  if (isDelayed === 'true' || isDelayed === true) where.push('o.is_delayed = true');
-  if (active === 'true'   || active === true)     where.push(`o.stage NOT IN ('completed','cancelled')`);
+  if (stage)     { params.push(stage);     where.push(`o.stage = $${params.length}`); }
+  if (clientType){ params.push(clientType); where.push(`o.client_type = $${params.length}`); }
+  if (staffId)   { params.push(staffId);   where.push(`o.assigned_staff_id = $${params.length}`); }
+  if (onHold  === 'true') where.push('o.is_on_hold = true');
+  if (active  === 'true') where.push(`o.stage != 'completed'`);
 
   params.push(parseInt(limit)); params.push(offset);
 
-  const sql = `
-    SELECT
-      o.*,
-      c.name        AS client_name,
-      c.whatsapp_number,
-      c.organisation,
-      s.name        AS staff_name
-    FROM orders o
-    JOIN clients c ON o.client_id = c.id
-    LEFT JOIN staff s ON o.assigned_staff_id = s.id
-    WHERE ${where.join(' AND ')}
-    ORDER BY o.is_urgent DESC, o.created_at DESC
-    LIMIT $${params.length - 1} OFFSET $${params.length}
-  `;
-
-  const { rows } = await query(sql, params);
+  const { rows } = await query(
+    `SELECT o.*,
+            c.name            AS client_name,
+            c.whatsapp_number,
+            c.organisation,
+            s.name            AS staff_name
+     FROM orders o
+     JOIN   clients c ON o.client_id         = c.id
+     LEFT JOIN staff s ON o.assigned_staff_id = s.id
+     WHERE ${where.join(' AND ')}
+     ORDER BY o.created_at DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
   return rows;
 }
 
-// ── Get a single order with its stage history ───────────────────────────────
+// ── Get a single order ────────────────────────────────────────────────────────
 export async function getOrderById(id) {
   const { rows } = await query(
-    `SELECT o.*, c.name AS client_name, c.whatsapp_number, c.organisation,
-            s.name AS staff_name
+    `SELECT o.*,
+            c.name            AS client_name,
+            c.whatsapp_number,
+            c.organisation,
+            s.name            AS staff_name
      FROM orders o
-     JOIN clients c ON o.client_id = c.id
+     JOIN   clients c ON o.client_id         = c.id
      LEFT JOIN staff s ON o.assigned_staff_id = s.id
      WHERE o.id = $1`,
     [id]
   );
   if (!rows.length) throw new HttpError(404, 'Order not found');
 
-  const history = await query(
-    `SELECT h.*, s.name AS changed_by_name
-     FROM order_stage_history h
-     LEFT JOIN staff s ON h.changed_by = s.id
-     WHERE h.order_id = $1
-     ORDER BY h.changed_at ASC`,
+  const { rows: payments } = await query(
+    'SELECT * FROM payments WHERE order_id = $1 ORDER BY created_at DESC',
     [id]
   );
 
-  return { order: rows[0], history: history.rows };
+  return { order: rows[0], payments };
 }
 
-// ── Create a new order ────────────────────────────────────────────────────────
-// `initialStage` lets a caller skip the order straight to a later stage (e.g. a
-// validated purchase order arrives after the quotation step already happened
-// outside the order pipeline) — defaults to the normal starting stage.
-export async function createOrder(data, staffId) {
-  const {
-    clientId, clientType, description, quantity, estimatedCompletion, specialNotes,
-    isUrgent, quotationId, initialStage = 'quotation_requested',
-  } = data;
+// ── Create an order from scratch (dashboard use) ──────────────────────────────
+export async function createOrder({ clientId, clientType, quotationId, poNumber, assignedStaffId } = {}) {
+  const reference = await nextOrderRef();
 
-  return withTransaction(async (client) => {
-    const reference = generateRef();
-
-    const { rows } = await client.query(
-      `INSERT INTO orders (reference, client_id, assigned_staff_id, client_type, description, quantity,
-        estimated_completion, special_notes, is_urgent, quotation_id, stage)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [reference, clientId, staffId, clientType, description, quantity || null,
-       estimatedCompletion || null, specialNotes || null, isUrgent, quotationId || null, initialStage]
-    );
-    const order = rows[0];
-
-    await client.query(
-      `INSERT INTO order_stage_history (order_id, from_stage, to_stage, changed_by, notes)
-       VALUES ($1, NULL, $2, $3, 'Order created')`,
-      [order.id, initialStage, staffId]
-    );
-
-    const clientRow = await client.query('SELECT * FROM clients WHERE id = $1', [clientId]);
-    const cl = clientRow.rows[0];
-    if (cl?.whatsapp_number) {
-      const templateKey = initialStage === 'quotation_requested' ? 'STAGE_1_QUOTATION_REQUESTED' : templateForStage(initialStage);
-      if (templateKey && TEMPLATES[templateKey]) {
-        await sendTextMessage(cl.whatsapp_number, TEMPLATES[templateKey]({ reference }));
-      }
-    }
-
-    return order;
-  });
-}
-
-// ── Clone a previous order into a new one, restarting the pipeline ───────────
-export async function repeatOrder(previousReference, clientId, staffId = null) {
   const { rows } = await query(
-    'SELECT * FROM orders WHERE reference = $1 AND client_id = $2',
-    [previousReference, clientId]
+    `INSERT INTO orders
+       (reference, client_id, client_type, quotation_id, po_number, assigned_staff_id, stage)
+     VALUES ($1,$2,$3,$4,$5,$6,'quotation_requested')
+     RETURNING *`,
+    [reference, clientId, clientType || 'retail', quotationId || null, poNumber || null, assignedStaffId || null]
   );
-  if (!rows.length) throw new HttpError(404, 'Previous order not found');
-
-  const previous = rows[0];
-  const order = await createOrder({
-    clientId,
-    clientType: previous.client_type,
-    description: previous.description,
-    quantity: previous.quantity,
-    isUrgent: false,
-  }, staffId);
-
-  return { order, previousReference: previous.reference };
+  return rows[0];
 }
 
-// ── Advance an order to its next stage ────────────────────────────────────────
-export async function advanceOrderStage(orderId, staffId, data) {
-  const { notes, estimatedCompletion, trackingNumber, deliveryType } = data;
+// ── Convert an accepted quotation into an order ───────────────────────────────
+export async function convertFromQuotation(quotationId, staffId, { poNumber, assignedStaffId } = {}) {
+  const { rows: qRows } = await query('SELECT * FROM quotations WHERE id = $1', [quotationId]);
+  if (!qRows.length) throw new HttpError(404, 'Quotation not found');
+  const quotation = qRows[0];
 
+  if (quotation.status !== 'accepted') {
+    throw new HttpError(400, 'Only accepted quotations can be converted to orders');
+  }
+
+  const { rows: existing } = await query(
+    'SELECT id FROM orders WHERE quotation_id = $1 LIMIT 1',
+    [quotationId]
+  );
+  if (existing.length) throw new HttpError(409, 'An order already exists for this quotation');
+
+  const reference = await nextOrderRef();
+
+  // Derive 50% deposit by default (consultant can adjust on the order detail page)
+  const total        = Number(quotation.total);
+  const depositAmt   = parseFloat((total * 0.5).toFixed(2));
+  const balanceAmt   = parseFloat((total - depositAmt).toFixed(2));
+
+  const { rows } = await query(
+    `INSERT INTO orders
+       (reference, client_id, client_type, quotation_id, po_number,
+        assigned_staff_id, stage, payment_status, deposit_amount, balance_amount)
+     VALUES ($1,$2,$3,$4,$5,$6,'quotation_requested','unpaid',$7,$8)
+     RETURNING *`,
+    [
+      reference,
+      quotation.client_id,
+      'corporate',
+      quotationId,
+      poNumber || null,
+      assignedStaffId || staffId || null,
+      depositAmt,
+      balanceAmt,
+    ]
+  );
+  const order = rows[0];
+
+  // Notify client
+  const { rows: clientRows } = await query('SELECT * FROM clients WHERE id = $1', [order.client_id]);
+  const client = clientRows[0];
+  if (client?.whatsapp_number) {
+    await sendTextMessage(
+      client.whatsapp_number,
+      TEMPLATES.STAGE_1_QUOTATION_REQUESTED({ reference: order.reference })
+    ).catch((err) => logger.warn('Failed to notify client on order creation', { error: err.message }));
+  }
+
+  return order;
+}
+
+// ── Advance an order stage ─────────────────────────────────────────────────────
+export async function advanceOrderStage(orderId, staffId, { notes, estimatedCompletion, trackingNumber, deliveryType } = {}) {
   const { rows } = await query(
     `SELECT o.*, c.whatsapp_number, c.name AS client_name
      FROM orders o JOIN clients c ON o.client_id = c.id
@@ -171,113 +158,72 @@ export async function advanceOrderStage(orderId, staffId, data) {
   if (!rows.length) throw new HttpError(404, 'Order not found');
 
   const order = rows[0];
-  const from  = order.stage;
-  const to    = nextStage(from);
+  if (order.is_on_hold) throw new HttpError(400, 'Cannot advance a held order. Remove hold first.');
 
-  if (!to) throw new HttpError(400, 'Order is already at final stage');
-  if (['cancelled', 'on_hold'].includes(from))
-    throw new HttpError(400, `Cannot advance an order that is ${from}`);
-  if (from === 'design_approval_pending' && !order.design_approved_at)
-    throw new HttpError(400, 'Design must be approved by the client before production can begin');
+  const to = nextStage(order.stage);
+  if (!to) throw new HttpError(400, 'Order is already at the final stage');
 
-  const updatedOrder = await withTransaction(async (client) => {
-    const setFields = ['stage = $1', 'updated_at = NOW()'];
-    const params = [to];
+  const setFields = ['stage = $1', 'updated_at = NOW()'];
+  const params = [to];
 
-    if (estimatedCompletion) { params.push(estimatedCompletion); setFields.push(`estimated_completion = $${params.length}`); }
-    if (trackingNumber)      { params.push(trackingNumber);      setFields.push(`tracking_number = $${params.length}`); }
+  if (estimatedCompletion) { params.push(estimatedCompletion); setFields.push(`estimated_completion_date = $${params.length}`); }
+  if (trackingNumber)      { params.push(trackingNumber);      setFields.push(`tracking_number = $${params.length}`); }
 
-    params.push(order.id);
-    await client.query(
-      `UPDATE orders SET ${setFields.join(', ')} WHERE id = $${params.length}`,
-      params
-    );
+  params.push(orderId);
+  const { rows: updated } = await query(
+    `UPDATE orders SET ${setFields.join(', ')} WHERE id = $${params.length} RETURNING *`,
+    params
+  );
 
-    const histRow = await client.query(
-      `INSERT INTO order_stage_history (order_id, from_stage, to_stage, changed_by, notes)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [order.id, from, to, staffId, notes || null]
-    );
+  const updatedOrder = updated[0];
 
-    if (order.whatsapp_number) {
-      const templateKey = to === 'completed' && deliveryType === 'delivery'
-        ? 'STAGE_10_COMPLETED_DELIVERY'
-        : templateForStage(to);
+  if (order.whatsapp_number) {
+    const templateKey = to === 'completed' && deliveryType === 'delivery'
+      ? 'STAGE_10_COMPLETED_DELIVERY'
+      : templateForStage(to);
 
-      if (templateKey && TEMPLATES[templateKey]) {
-        const msg = TEMPLATES[templateKey]({
-          reference: order.reference,
-          estimatedCompletion: estimatedCompletion
-            ? new Date(estimatedCompletion).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-            : order.estimated_completion,
-          trackingNumber,
-        });
-        const waId = await sendTextMessage(order.whatsapp_number, msg);
-
-        await client.query(
-          'UPDATE order_stage_history SET wa_message_id = $1 WHERE id = $2',
-          [waId, histRow.rows[0].id]
-        );
-      }
-
-      // Flip the client's open conversation so their next reply is read as an
-      // approve/reject response rather than free text.
-      if (to === 'design_approval_pending') {
-        await client.query(
-          `UPDATE conversations SET state = 'corporate_design_approval', context = context || $1
-           WHERE client_id = $2 AND is_open = true`,
-          [JSON.stringify({ designApprovalOrderId: order.id }), order.client_id]
-        );
-      }
+    if (templateKey && TEMPLATES[templateKey]) {
+      const msg = TEMPLATES[templateKey]({
+        reference: order.reference,
+        estimatedCompletion: estimatedCompletion
+          ? new Date(estimatedCompletion).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+          : order.estimated_completion_date,
+        trackingNumber,
+      });
+      await sendTextMessage(order.whatsapp_number, msg)
+        .catch((err) => logger.warn('Stage advance WhatsApp notify failed', { error: err.message }));
     }
+  }
 
-    return { ...order, stage: to };
-  });
-
-  return { order: updatedOrder, from, to };
+  return { order: updatedOrder, from: order.stage, to };
 }
 
-// ── Record the client's design/artwork approval response ─────────────────────
-export async function recordDesignApproval(orderId, { approved, reason }, staffId = null) {
-  const { rows } = await query('SELECT * FROM orders WHERE id = $1', [orderId]);
+// ── Toggle hold / release hold ────────────────────────────────────────────────
+export async function setOrderHold(orderId, { isOnHold, holdReason }) {
+  const { rows } = await query(
+    `UPDATE orders
+     SET is_on_hold = $1, hold_reason = $2, updated_at = NOW()
+     WHERE id = $3
+     RETURNING *,
+       (SELECT whatsapp_number FROM clients WHERE id = client_id) AS whatsapp_number`,
+    [isOnHold, isOnHold ? (holdReason || null) : null, orderId]
+  );
   if (!rows.length) throw new HttpError(404, 'Order not found');
+
   const order = rows[0];
 
-  if (order.stage !== 'design_approval_pending')
-    throw new HttpError(400, 'Order is not awaiting design approval');
-
-  if (approved) {
-    await query('UPDATE orders SET design_approved_at = NOW(), updated_at = NOW() WHERE id = $1', [orderId]);
-    return advanceOrderStage(orderId, staffId, {});
+  // Auto-send supplier delay notification when that reason is selected
+  if (isOnHold && holdReason === 'supplier_delay' && order.whatsapp_number) {
+    await sendTextMessage(
+      order.whatsapp_number,
+      TEMPLATES.SUPPLIER_DELAY({ reference: order.reference })
+    ).catch((err) => logger.warn('Supplier delay WhatsApp notify failed', { error: err.message }));
   }
 
-  const { rows: updated } = await query(
-    `UPDATE orders SET stage = 'on_hold', delay_reason = $1, design_rejection_reason = $1, updated_at = NOW()
-     WHERE id = $2 RETURNING *`,
-    [reason || 'Design rejected by client', orderId]
-  );
-  return { order: updated[0], from: 'design_approval_pending', to: 'on_hold' };
+  return order;
 }
 
-// ── Flag an order as delayed ──────────────────────────────────────────────────
-export async function delayOrder(orderId, { reason, notify = true }) {
-  const { rows } = await query(
-    `UPDATE orders SET is_delayed = true, delay_reason = $1, updated_at = NOW()
-     WHERE id = $2
-     RETURNING *, (SELECT whatsapp_number FROM clients WHERE id = client_id) AS whatsapp_number`,
-    [reason || null, orderId]
-  );
-  if (!rows.length) throw new HttpError(404, 'Order not found');
-
-  if (notify && rows[0].whatsapp_number) {
-    const msg = TEMPLATES.SUPPLIER_DELAY({ reference: rows[0].reference });
-    await sendTextMessage(rows[0].whatsapp_number, msg);
-  }
-
-  return rows[0];
-}
-
-// ── Assign a consultant to an order ───────────────────────────────────────────
+// ── Assign a consultant to an order ──────────────────────────────────────────
 export async function assignOrder(orderId, staffId) {
   const { rows } = await query(
     'UPDATE orders SET assigned_staff_id = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
@@ -285,4 +231,98 @@ export async function assignOrder(orderId, staffId) {
   );
   if (!rows.length) throw new HttpError(404, 'Order not found');
   return rows[0];
+}
+
+// ── Record a payment against an order ────────────────────────────────────────
+export async function recordPayment(orderId, { type, amount, currency, notes }) {
+  const { rows: orderRows } = await query('SELECT * FROM orders WHERE id = $1', [orderId]);
+  if (!orderRows.length) throw new HttpError(404, 'Order not found');
+
+  const { rows } = await query(
+    `INSERT INTO payments (order_id, type, amount, currency, notes)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [orderId, type, amount, currency || 'ZAR', notes || null]
+  );
+
+  // Update payment status based on type
+  const newStatus = type === 'full' ? 'paid_in_full'
+    : type === 'deposit' ? 'deposit_paid'
+    : 'deposit_paid';
+
+  await query(
+    'UPDATE orders SET payment_status = $1, updated_at = NOW() WHERE id = $2',
+    [newStatus, orderId]
+  );
+
+  return rows[0];
+}
+
+// ── List payments for an order ────────────────────────────────────────────────
+export async function listPayments(orderId) {
+  const { rows } = await query(
+    'SELECT * FROM payments WHERE order_id = $1 ORDER BY created_at DESC',
+    [orderId]
+  );
+  return rows;
+}
+
+// ── Stage label helper (for dashboard/tracking) ───────────────────────────────
+export function getStageInfo(stage) {
+  const idx = STAGE_ORDER.indexOf(stage);
+  return {
+    index:   idx,
+    total:   STAGE_ORDER.length,
+    percent: idx >= 0 ? Math.round(((idx + 1) / STAGE_ORDER.length) * 100) : null,
+    label:   STAGE_ORDER.indexOf(stage) >= 0 ? stage : 'unknown',
+    isFirst: idx === 0,
+    isLast:  idx === STAGE_ORDER.length - 1,
+  };
+}
+
+// ── Dashboard KPI helper ──────────────────────────────────────────────────────
+export async function getDashboardKpis() {
+  const { rows } = await query(`
+    SELECT
+      (SELECT COUNT(*) FROM conversations WHERE is_open = true AND assigned_staff_id IS NULL)
+        AS new_enquiries,
+      (SELECT COUNT(*) FROM quotations    WHERE status = 'draft')
+        AS quotations_awaiting_pricing,
+      (SELECT COUNT(*) FROM orders        WHERE stage != 'completed' AND is_on_hold = false)
+        AS active_orders,
+      (SELECT COUNT(*) FROM tickets       WHERE status IN ('open','in_progress'))
+        AS open_tickets,
+      (SELECT COUNT(*) FROM orders        WHERE is_on_hold = true)
+        AS on_hold_orders
+  `);
+
+  const kpis = rows[0];
+
+  // Needs-attention feed: draft quotations + open tickets, with claim ownership
+  const { rows: attention } = await query(`
+    SELECT 'quotation' AS type, q.id, q.reference, q.created_at,
+           q.sla_remind_at AS deadline,
+           (q.sla_remind_at <= NOW()) AS is_overdue,
+           q.assigned_staff_id,
+           s.name  AS assigned_name,
+           c.name  AS client_name
+    FROM quotations q
+    LEFT JOIN staff   s ON s.id = q.assigned_staff_id
+    LEFT JOIN clients c ON c.id = q.client_id
+    WHERE q.status = 'draft' AND q.reminder_sent_at IS NULL
+    UNION ALL
+    SELECT 'ticket' AS type, t.id, t.id::text AS reference, t.created_at,
+           t.sla_due_at AS deadline,
+           (t.sla_due_at < NOW() AND t.status IN ('open','in_progress')) AS is_overdue,
+           t.assigned_staff_id,
+           s.name  AS assigned_name,
+           c.name  AS client_name
+    FROM tickets t
+    LEFT JOIN staff   s ON s.id = t.assigned_staff_id
+    LEFT JOIN clients c ON c.id = t.client_id
+    WHERE t.status IN ('open','in_progress')
+    ORDER BY is_overdue DESC, deadline ASC
+    LIMIT 20
+  `);
+
+  return { kpis, attention };
 }

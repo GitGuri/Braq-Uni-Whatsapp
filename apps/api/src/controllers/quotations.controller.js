@@ -3,6 +3,7 @@ import * as quotationsService from '../services/quotations.service.js';
 import { validateQuotation } from '../validators/index.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
+import { query } from '../db/pool.js';
 
 const LineItemSchema = z.object({
   productId:      z.string().nullable().optional(),
@@ -66,6 +67,50 @@ export async function approve(req, res) {
     res.json({ quotation });
   } catch (err) {
     handleError(res, err, 'Failed to approve quotation');
+  }
+}
+
+// ── POST /quotations/:id/claim ────────────────────────────────────────────────
+// Atomic first-to-claim — only succeeds if assigned_staff_id IS NULL
+export async function claim(req, res) {
+  try {
+    const { rows } = await query(
+      `UPDATE quotations
+       SET assigned_staff_id = $1, claimed_at = NOW(), updated_at = NOW()
+       WHERE id = $2 AND assigned_staff_id IS NULL
+       RETURNING *`,
+      [req.staff.id, req.params.id]
+    );
+
+    if (rows.length) return res.json({ quotation: rows[0] });
+
+    // Someone else claimed it — find out who
+    const { rows: current } = await query(
+      `SELECT q.id, s.name AS claimer_name
+       FROM quotations q
+       LEFT JOIN staff s ON s.id = q.assigned_staff_id
+       WHERE q.id = $1`,
+      [req.params.id]
+    );
+    if (!current.length) return res.status(404).json({ error: 'Quotation not found' });
+
+    return res.status(409).json({
+      error: `Already claimed by ${current[0].claimer_name ?? 'another consultant'}`,
+    });
+  } catch (err) {
+    handleError(res, err, 'Failed to claim quotation');
+  }
+}
+
+// ── PATCH /quotations/:id/status ─────────────────────────────────────────────
+export async function updateStatus(req, res) {
+  try {
+    const { status } = req.body;
+    if (!status) return res.status(400).json({ error: 'status is required' });
+    const quotation = await quotationsService.updateQuotationStatus(req.params.id, status);
+    res.json({ quotation });
+  } catch (err) {
+    handleError(res, err, 'Failed to update quotation status');
   }
 }
 

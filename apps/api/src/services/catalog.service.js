@@ -1,16 +1,21 @@
 import { query } from '../db/pool.js';
 import { HttpError } from '../utils/httpError.js';
 
+const VALID_COLUMNS = new Set(['name', 'category', 'school_name', 'price', 'currency', 'description', 'is_active']);
+
 // ── List products with optional filters ───────────────────────────────────────
-export async function listProducts({ category, clientType } = {}) {
-  let where = ['is_active = true'];
+export async function listProducts({ category, activeOnly, schoolName } = {}) {
+  const where = [];
   const params = [];
 
+  if (activeOnly) where.push('is_active = true');
   if (category)   { params.push(category);   where.push(`category = $${params.length}`); }
-  if (clientType) { params.push(clientType); where.push(`(client_type = $${params.length} OR client_type IS NULL)`); }
+  if (schoolName) { params.push(schoolName); where.push(`school_name = $${params.length}`); }
 
   const { rows } = await query(
-    `SELECT * FROM products WHERE ${where.join(' AND ')} ORDER BY category, name`,
+    `SELECT * FROM products
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY category, name`,
     params
   );
   return rows;
@@ -22,25 +27,29 @@ export async function getProductById(id) {
   return rows[0];
 }
 
-export async function createProduct({ category, name, sizes, price, currency, clientType }) {
+export async function createProduct({ category, name, schoolName, sizes, price, currency, description, isActive }) {
   const { rows } = await query(
-    `INSERT INTO products (category, name, sizes, price, currency, client_type)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [category, name, JSON.stringify(sizes || []), price, currency || 'ZAR', clientType || null]
+    `INSERT INTO products (category, name, school_name, sizes, price, currency, description, is_active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [
+      category, name, schoolName || null,
+      JSON.stringify(sizes || []), price, currency || 'ZAR',
+      description || null, isActive !== false,
+    ]
   );
   return rows[0];
 }
-
-const FIELD_MAP = {
-  category: 'category', name: 'name', price: 'price',
-  currency: 'currency', clientType: 'client_type', isActive: 'is_active',
-};
 
 export async function updateProduct(id, data) {
   const fields = [];
   const params = [];
 
-  for (const [key, col] of Object.entries(FIELD_MAP)) {
+  const fieldMap = {
+    name: 'name', category: 'category', schoolName: 'school_name',
+    price: 'price', currency: 'currency', description: 'description', isActive: 'is_active',
+  };
+
+  for (const [key, col] of Object.entries(fieldMap)) {
     if (data[key] !== undefined) {
       params.push(data[key]);
       fields.push(`${col} = $${params.length}`);
@@ -54,9 +63,31 @@ export async function updateProduct(id, data) {
 
   params.push(id);
   const { rows } = await query(
-    `UPDATE products SET ${fields.join(', ')}, updated_at = NOW() WHERE id = $${params.length} RETURNING *`,
+    `UPDATE products SET ${fields.join(', ')}, updated_at = NOW()
+     WHERE id = $${params.length} RETURNING *`,
     params
   );
   if (!rows.length) throw new HttpError(404, 'Product not found');
   return rows[0];
+}
+
+// ── School-specific helpers (used by bot) ─────────────────────────────────────
+
+export async function listSchoolNames() {
+  const { rows } = await query(
+    `SELECT DISTINCT school_name FROM products
+     WHERE category = 'school_wear' AND school_name IS NOT NULL AND is_active = true
+     ORDER BY school_name`
+  );
+  return rows.map((r) => r.school_name);
+}
+
+export async function listProductsBySchool(schoolName) {
+  const { rows } = await query(
+    `SELECT * FROM products
+     WHERE category = 'school_wear' AND school_name = $1 AND is_active = true
+     ORDER BY name`,
+    [schoolName]
+  );
+  return rows;
 }

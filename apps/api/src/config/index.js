@@ -45,6 +45,13 @@ export const config = {
     apiKey: optional('GEMINI_API_KEY', ''),
   },
 
+  resend: {
+    apiKey:    optional('RESEND_API_KEY', ''),
+    fromEmail: optional('FROM_EMAIL', 'notifications@braquni.com'),
+  },
+
+  dashboardBaseUrl: optional('DASHBOARD_BASE_URL', 'http://localhost:5173'),
+
   log: {
     level: optional('LOG_LEVEL', 'info'),
   },

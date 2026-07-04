@@ -1,21 +1,16 @@
 import { z } from 'zod';
 import * as ordersService from '../services/orders.service.js';
-import * as paymentsService from '../services/payments.service.js';
-import * as sizesService from '../services/sizes.service.js';
-import * as quotationsService from '../services/quotations.service.js';
-import { getClientById } from '../services/clients.service.js';
-import { validateOrder } from '../validators/index.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
 
+const CLIENT_TYPES = ['retail','school','corporate','hospitality','church','security','government','reseller'];
+
 const CreateOrderSchema = z.object({
-  clientId:            z.string().uuid(),
-  clientType:          z.enum(['retail','school','corporate','hospitality','church','security','government','reseller']),
-  description:         z.string().min(1).max(1000),
-  quantity:            z.number().int().positive().optional(),
-  estimatedCompletion: z.string().optional(), // ISO date string
-  specialNotes:        z.string().optional(),
-  isUrgent:            z.boolean().default(false),
+  clientId:        z.string().uuid(),
+  clientType:      z.enum(CLIENT_TYPES).default('retail'),
+  quotationId:     z.string().uuid().optional(),
+  poNumber:        z.string().optional(),
+  assignedStaffId: z.string().uuid().optional(),
 });
 
 const AdvanceStageSchema = z.object({
@@ -26,115 +21,100 @@ const AdvanceStageSchema = z.object({
 });
 
 const RecordPaymentSchema = z.object({
-  amount: z.number().positive(),
-  type:   z.enum(['deposit', 'balance', 'full']),
-  notes:  z.string().optional(),
+  type:     z.enum(['deposit', 'balance', 'full']),
+  amount:   z.number().positive(),
+  currency: z.string().length(3).default('ZAR'),
+  notes:    z.string().optional(),
 });
 
-function handleError(res, err, fallbackMessage) {
+const HoldSchema = z.object({
+  isOnHold:   z.boolean(),
+  holdReason: z.string().optional(),
+});
+
+const ConvertSchema = z.object({
+  poNumber:        z.string().optional(),
+  assignedStaffId: z.string().uuid().optional(),
+});
+
+function handleError(res, err, fallback) {
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
-  logger.error(fallbackMessage, { error: err.message });
-  return res.status(500).json({ error: fallbackMessage });
+  logger.error(fallback, { error: err.message });
+  return res.status(500).json({ error: fallback });
 }
 
-// ── GET /orders ────────────────────────────────────────────────────────────────
+// ── GET /orders ──────────────────────────────────────────────────────────────
 export async function list(req, res) {
   try {
-    const { page = 1, limit = 20 } = req.query;
     const orders = await ordersService.listOrders(req.query);
-    res.json({ orders, page: parseInt(page), limit: parseInt(limit) });
-  } catch (err) {
-    handleError(res, err, 'Failed to fetch orders');
-  }
+    res.json({ orders });
+  } catch (err) { handleError(res, err, 'Failed to fetch orders'); }
 }
 
-// ── GET /orders/:id ────────────────────────────────────────────────────────────
+// ── GET /orders/kpis ─────────────────────────────────────────────────────────
+export async function kpis(req, res) {
+  try {
+    const data = await ordersService.getDashboardKpis();
+    res.json(data);
+  } catch (err) { handleError(res, err, 'Failed to fetch KPIs'); }
+}
+
+// ── GET /orders/:id ──────────────────────────────────────────────────────────
 export async function getById(req, res) {
   try {
     const result = await ordersService.getOrderById(req.params.id);
-    const { percent } = ordersService.getStageProgress(result.order.stage);
-
-    const [sizeEntries, { client }] = await Promise.all([
-      sizesService.listSizeEntries(req.params.id),
-      getClientById(result.order.client_id),
-    ]);
-
-    let quotation = null;
-    if (result.order.quotation_id) {
-      try { quotation = await quotationsService.getQuotationById(result.order.quotation_id); } catch { /* ok */ }
-    }
-
-    const validation = validateOrder(result.order, { sizeEntries, quotation, client });
-
-    res.json({ ...result, progressPercent: percent, validation });
-  } catch (err) {
-    handleError(res, err, 'Failed to fetch order');
-  }
+    const info = ordersService.getStageInfo(result.order.stage);
+    res.json({ ...result, stageInfo: info });
+  } catch (err) { handleError(res, err, 'Failed to fetch order'); }
 }
 
-// ── POST /orders ───────────────────────────────────────────────────────────────
+// ── POST /orders ─────────────────────────────────────────────────────────────
 export async function create(req, res) {
   const parsed = CreateOrderSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const order = await ordersService.createOrder(parsed.data, req.staff.id);
+    const order = await ordersService.createOrder({ ...parsed.data, assignedStaffId: parsed.data.assignedStaffId || req.staff.id });
     res.status(201).json({ order });
-  } catch (err) {
-    handleError(res, err, 'Failed to create order');
-  }
+  } catch (err) { handleError(res, err, 'Failed to create order'); }
 }
 
-// ── POST /orders/:id/advance ───────────────────────────────────────────────────
+// ── POST /orders/:id/convert-from-quotation ──────────────────────────────────
+export async function convertFromQuotation(req, res) {
+  const parsed = ConvertSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  try {
+    const order = await ordersService.convertFromQuotation(req.params.id, req.staff.id, parsed.data);
+    logger.info('Quotation converted to order', { quotationId: req.params.id, orderId: order.id, by: req.staff.email });
+    res.status(201).json({ order });
+  } catch (err) { handleError(res, err, 'Failed to convert quotation to order'); }
+}
+
+// ── POST /orders/:id/advance ─────────────────────────────────────────────────
 export async function advance(req, res) {
   const parsed = AdvanceStageSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    // Load full context required by the validator
-    const { order } = await ordersService.getOrderById(req.params.id);
-
-    let quotation = null;
-    if (order.quotation_id) {
-      quotation = await quotationsService.getQuotationById(order.quotation_id);
-    }
-
-    const [sizeEntries, { client }] = await Promise.all([
-      sizesService.listSizeEntries(req.params.id),
-      getClientById(order.client_id),
-    ]);
-
-    const { canAdvance, missing } = validateOrder(order, { sizeEntries, quotation, client });
-    if (!canAdvance) {
-      return res.status(422).json({
-        error: 'Order cannot advance until the following are resolved',
-        missing,
-      });
-    }
-
-    const { order: updatedOrder, from, to } = await ordersService.advanceOrderStage(
-      req.params.id, req.staff.id, parsed.data,
-    );
-    logger.info('Order stage advanced', {
-      orderId: req.params.id, reference: updatedOrder.reference, from, to, by: req.staff.email,
-    });
-    res.json({ order: updatedOrder, from, to });
-  } catch (err) {
-    handleError(res, err, 'Failed to advance order stage');
-  }
+    const { order, from, to } = await ordersService.advanceOrderStage(req.params.id, req.staff.id, parsed.data);
+    logger.info('Order stage advanced', { orderId: req.params.id, from, to, by: req.staff.email });
+    res.json({ order, from, to });
+  } catch (err) { handleError(res, err, 'Failed to advance order stage'); }
 }
 
-// ── POST /orders/:id/delay ─────────────────────────────────────────────────────
-export async function delay(req, res) {
+// ── PATCH /orders/:id/hold ───────────────────────────────────────────────────
+export async function hold(req, res) {
+  const parsed = HoldSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
   try {
-    const order = await ordersService.delayOrder(req.params.id, req.body);
+    const order = await ordersService.setOrderHold(req.params.id, parsed.data);
     res.json({ order });
-  } catch (err) {
-    handleError(res, err, 'Failed to flag delay');
-  }
+  } catch (err) { handleError(res, err, 'Failed to update hold status'); }
 }
 
-// ── PATCH /orders/:id/assign ───────────────────────────────────────────────────
+// ── PATCH /orders/:id/assign ─────────────────────────────────────────────────
 export async function assign(req, res) {
   const { staffId } = req.body;
   if (!staffId) return res.status(400).json({ error: 'staffId required' });
@@ -142,53 +122,24 @@ export async function assign(req, res) {
   try {
     const order = await ordersService.assignOrder(req.params.id, staffId);
     res.json({ order });
-  } catch (err) {
-    handleError(res, err, 'Failed to assign consultant');
-  }
+  } catch (err) { handleError(res, err, 'Failed to assign consultant'); }
 }
 
-// ── POST /orders/:id/payments ──────────────────────────────────────────────────
+// ── POST /orders/:id/payments ────────────────────────────────────────────────
 export async function recordPayment(req, res) {
   const parsed = RecordPaymentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const order = await paymentsService.recordPayment(req.params.id, { ...parsed.data, staffId: req.staff.id });
-    res.status(201).json({ order });
-  } catch (err) {
-    handleError(res, err, 'Failed to record payment');
-  }
+    const payment = await ordersService.recordPayment(req.params.id, parsed.data);
+    res.status(201).json({ payment });
+  } catch (err) { handleError(res, err, 'Failed to record payment'); }
 }
 
-// ── GET /orders/:id/payments ───────────────────────────────────────────────────
+// ── GET /orders/:id/payments ─────────────────────────────────────────────────
 export async function listPayments(req, res) {
   try {
-    const payments = await paymentsService.listPaymentsForOrder(req.params.id);
+    const payments = await ordersService.listPayments(req.params.id);
     res.json({ payments });
-  } catch (err) {
-    handleError(res, err, 'Failed to fetch payments');
-  }
-}
-
-// ── POST /orders/:id/sizes/upload ──────────────────────────────────────────────
-export async function uploadSizes(req, res) {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
-  try {
-    const rows = await sizesService.parseSizeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
-    const entries = await sizesService.bulkInsertSizeEntries(req.params.id, rows);
-    res.status(201).json({ entries });
-  } catch (err) {
-    handleError(res, err, 'Failed to process size file');
-  }
-}
-
-// ── GET /orders/:id/sizes ──────────────────────────────────────────────────────
-export async function listSizes(req, res) {
-  try {
-    const entries = await sizesService.listSizeEntries(req.params.id);
-    res.json({ entries });
-  } catch (err) {
-    handleError(res, err, 'Failed to fetch size entries');
-  }
+  } catch (err) { handleError(res, err, 'Failed to fetch payments'); }
 }

@@ -5,6 +5,7 @@ import * as ticketsController from '../controllers/tickets.controller.js';
 export const ticketsRouter = express.Router();
 ticketsRouter.use(requireAuth);
 
-ticketsRouter.get('/', ticketsController.list);
-ticketsRouter.get('/:id', ticketsController.getById);
-ticketsRouter.patch('/:id', ticketsController.update);
+ticketsRouter.get('/',         ticketsController.list);
+ticketsRouter.get('/:id',      ticketsController.getById);
+ticketsRouter.patch('/:id',    ticketsController.update);
+ticketsRouter.post('/:id/claim', ticketsController.claim);

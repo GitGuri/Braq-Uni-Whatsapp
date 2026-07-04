@@ -1,154 +1,155 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import {
-  Table, Card, Typography, Select, Input, Button, Tag, Space, Row, Col,
-} from 'antd'
-import { PlusOutlined, WarningOutlined } from '@ant-design/icons'
+import { Table, Card, Typography, Select, Input, Button, Tag, Space, Badge } from 'antd'
+import { SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { listOrders } from '../../api/orders.js'
-import StageTag, { STAGES, stageLabel } from '../../components/StageTag.jsx'
-import CreateOrderModal from './CreateOrderModal.jsx'
 
-const { Title } = Typography
+const { Text } = Typography
+
+const STAGES = [
+  { value: 'quotation_requested',  label: '1. Quotation Requested' },
+  { value: 'quotation_submitted',  label: '2. Quotation Submitted' },
+  { value: 'po_received',          label: '3. PO Received' },
+  { value: 'materials_procurement',label: '4. Materials Procurement' },
+  { value: 'production_scheduled', label: '5. Production Scheduled' },
+  { value: 'manufacturing',        label: '6. Manufacturing' },
+  { value: 'branding_embroidery',  label: '7. Branding & Embroidery' },
+  { value: 'quality_control',      label: '8. Quality Control' },
+  { value: 'packing_dispatch',     label: '9. Packing & Dispatch' },
+  { value: 'completed',            label: '10. Completed' },
+]
+
+const STAGE_COLORS = {
+  quotation_requested:   'default',
+  quotation_submitted:   'blue',
+  po_received:           'cyan',
+  materials_procurement: 'geekblue',
+  production_scheduled:  'purple',
+  manufacturing:         'magenta',
+  branding_embroidery:   'volcano',
+  quality_control:       'orange',
+  packing_dispatch:      'gold',
+  completed:             'green',
+}
 
 export default function OrdersList() {
   const navigate = useNavigate()
-  const [filters, setFilters] = useState({ page: 1, limit: 20 })
+  const [searchParams] = useSearchParams()
+  const [stage, setStage] = useState(null)
   const [search, setSearch] = useState('')
-  const [createOpen, setCreateOpen] = useState(false)
+  const [onHold, setOnHold] = useState(searchParams.get('onHold') === 'true' ? 'true' : null)
 
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: ['orders', filters],
-    queryFn: () => listOrders(filters),
+  const { data, isLoading } = useQuery({
+    queryKey: ['orders', { stage, onHold }],
+    queryFn: () => listOrders({ stage: stage || undefined, onHold: onHold || undefined }),
   })
 
-  const orders = data?.orders ?? []
+  const orders = (data?.orders ?? []).filter(o => {
+    if (!search) return true
+    const q = search.toLowerCase()
+    return (
+      o.reference?.toLowerCase().includes(q) ||
+      o.client_name?.toLowerCase().includes(q) ||
+      o.organisation?.toLowerCase().includes(q)
+    )
+  })
 
   const columns = [
     {
       title: 'Reference',
       dataIndex: 'reference',
-      key: 'reference',
-      render: (ref) => <strong>{ref}</strong>,
+      render: (ref, row) => (
+        <a style={{ fontWeight: 600, fontFamily: 'monospace' }} onClick={() => navigate(`/orders/${row.id}`)}>
+          {ref}
+        </a>
+      ),
     },
     {
       title: 'Client',
-      key: 'client',
-      render: (_, row) => row.client_name ?? '—',
+      render: (_, r) => (
+        <div>
+          <Text strong style={{ fontSize: 13 }}>{r.client_name ?? '—'}</Text>
+          {r.organisation && <div><Text type="secondary" style={{ fontSize: 11 }}>{r.organisation}</Text></div>}
+        </div>
+      ),
     },
     {
       title: 'Type',
       dataIndex: 'client_type',
-      key: 'client_type',
-      render: (v) => <Tag>{v}</Tag>,
+      render: (v) => <Tag style={{ fontSize: 11 }}>{v}</Tag>,
     },
     {
       title: 'Stage',
       dataIndex: 'stage',
-      key: 'stage',
-      render: (stage) => (
-        <Space size={4}>
-          <StageTag stage={stage} />
-          {stage === 'quotation_submitted' && (
-            <Tag
-              icon={<WarningOutlined />}
-              color="warning"
-              style={{ fontSize: 11, padding: '0 4px' }}
-            >
-              Gate
-            </Tag>
-          )}
-        </Space>
+      render: (s) => (
+        <Tag color={STAGE_COLORS[s] ?? 'default'} style={{ fontSize: 11 }}>
+          {STAGES.find(st => st.value === s)?.label ?? s}
+        </Tag>
       ),
     },
     {
-      title: 'Flags',
-      key: 'flags',
-      render: (_, row) => (
+      title: 'Status',
+      render: (_, r) => (
         <Space size={4}>
-          {row.is_urgent && <Tag color="red">Urgent</Tag>}
-          {row.is_delayed && <Tag color="orange">Delayed</Tag>}
+          {r.is_on_hold && <Tag color="red">On Hold</Tag>}
+          <Tag color={r.payment_status === 'paid_in_full' ? 'green' : r.payment_status === 'deposit_paid' ? 'orange' : 'default'}>
+            {r.payment_status?.replace(/_/g, ' ')}
+          </Tag>
         </Space>
       ),
-    },
-    {
-      title: 'Assigned To',
-      key: 'assigned',
-      render: (_, row) => row.assigned_name ?? <span style={{ color: '#999' }}>Unassigned</span>,
     },
     {
       title: 'Created',
       dataIndex: 'created_at',
-      key: 'created_at',
-      render: (v) => dayjs(v).format('DD MMM YYYY'),
+      render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(v).format('DD MMM YYYY')}</Text>,
     },
   ]
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>Orders</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          New Order
-        </Button>
+        <Text style={{ fontSize: 18, fontWeight: 700 }}>Orders</Text>
+        <Space>
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder="Search by reference or client…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ width: 240 }}
+            allowClear
+          />
+          <Select
+            placeholder="Filter by stage"
+            value={stage}
+            onChange={setStage}
+            allowClear
+            style={{ width: 220 }}
+            options={STAGES}
+          />
+          <Select
+            placeholder="Hold status"
+            value={onHold}
+            onChange={setOnHold}
+            allowClear
+            style={{ width: 140 }}
+            options={[{ value: 'true', label: 'On Hold' }]}
+          />
+        </Space>
       </div>
 
-      <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[12, 12]}>
-          <Col xs={24} sm={8}>
-            <Select
-              allowClear
-              placeholder="Filter by stage"
-              style={{ width: '100%' }}
-              options={STAGES.map((s) => ({ value: s, label: stageLabel(s) }))}
-              onChange={(v) => setFilters((f) => ({ ...f, stage: v, page: 1 }))}
-            />
-          </Col>
-          <Col xs={24} sm={8}>
-            <Select
-              allowClear
-              placeholder="Delayed only"
-              style={{ width: '100%' }}
-              options={[{ value: 'true', label: 'Delayed orders' }]}
-              onChange={(v) => setFilters((f) => ({ ...f, isDelayed: v, page: 1 }))}
-            />
-          </Col>
-          <Col xs={24} sm={8}>
-            <Select
-              allowClear
-              placeholder="Urgent only"
-              style={{ width: '100%' }}
-              options={[{ value: 'true', label: 'Urgent orders' }]}
-              onChange={(v) => setFilters((f) => ({ ...f, isUrgent: v, page: 1 }))}
-            />
-          </Col>
-        </Row>
-      </Card>
-
-      <Card>
+      <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 10 }}>
         <Table
           dataSource={orders}
           columns={columns}
           rowKey="id"
           loading={isLoading}
-          pagination={{
-            current: filters.page,
-            pageSize: filters.limit,
-            onChange: (page) => setFilters((f) => ({ ...f, page })),
-          }}
-          onRow={(row) => ({ onClick: () => navigate(`/orders/${row.id}`) })}
-          rowHoverable
-          style={{ cursor: 'pointer' }}
+          pagination={{ pageSize: 25, showSizeChanger: false }}
           size="middle"
+          onRow={row => ({ onClick: () => navigate(`/orders/${row.id}`), style: { cursor: 'pointer' } })}
         />
       </Card>
-
-      <CreateOrderModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSuccess={() => { setCreateOpen(false); refetch() }}
-      />
     </div>
   )
 }

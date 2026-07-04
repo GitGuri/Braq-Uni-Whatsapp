@@ -10,4 +10,6 @@ quotationsRouter.get('/:id/pdf', quotationsController.getPdf);
 quotationsRouter.use(requireAuth);
 quotationsRouter.get('/',           quotationsController.list);
 quotationsRouter.get('/:id',        quotationsController.getById);
-quotationsRouter.post('/:id/approve', quotationsController.approve);
+quotationsRouter.post('/:id/approve',   quotationsController.approve);
+quotationsRouter.patch('/:id/status',  quotationsController.updateStatus);
+quotationsRouter.post('/:id/claim',    quotationsController.claim);

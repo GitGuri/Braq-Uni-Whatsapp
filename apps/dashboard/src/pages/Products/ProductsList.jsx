@@ -1,280 +1,201 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Row, Col, Card, Typography, Button, Tag, Modal, Form, Input, InputNumber,
-  Checkbox, message, Drawer, Table,
+  Tabs, Card, Table, Typography, Button, Tag, Modal, Form, Input, InputNumber,
+  Select, Switch, message, Space,
 } from 'antd'
-import {
-  PlusOutlined, EditOutlined, ReadOutlined, MedicineBoxOutlined,
-  CompassOutlined, BankOutlined, ToolOutlined, SkinOutlined,
-} from '@ant-design/icons'
+import { PlusOutlined, EditOutlined } from '@ant-design/icons'
 import { listProducts, createProduct, updateProduct } from '../../api/products.js'
 
-const { Title, Text } = Typography
-
-const SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL']
+const { Text } = Typography
 
 const CATEGORIES = [
-  {
-    key:   'school_wear',
-    label: 'School Wear',
-    icon:  <ReadOutlined style={{ fontSize: 26 }} />,
-    color: '#1677ff',
-    desc:  'Ties, socks, jerseys, skirts, shorts, trousers, blazers, windbreakers, shirts',
-  },
-  {
-    key:   'knitwear',
-    label: 'Knitwear',
-    icon:  <SkinOutlined style={{ fontSize: 26 }} />,
-    color: '#722ed1',
-    desc:  'Knitted garments and knitwear products',
-  },
-  {
-    key:   'medical_wear',
-    label: 'Medical Wear',
-    icon:  <MedicineBoxOutlined style={{ fontSize: 26 }} />,
-    color: '#eb2f96',
-    desc:  'Scrubs, doctors coats, surgical gowns, patient gowns',
-  },
-  {
-    key:   'outdoor_wear',
-    label: 'Outdoor Wear',
-    icon:  <CompassOutlined style={{ fontSize: 26 }} />,
-    color: '#52c41a',
-    desc:  'Outdoor and activewear garments',
-  },
-  {
-    key:   'corporate_wear',
-    label: 'Corporate Wear',
-    icon:  <BankOutlined style={{ fontSize: 26 }} />,
-    color: '#d46b08',
-    desc:  'Shirts, blazers, pencil skirts, chino pants, trousers, ties, polo shirts',
-  },
-  {
-    key:   'safety_wear',
-    label: 'Safety Wear',
-    icon:  <ToolOutlined style={{ fontSize: 26 }} />,
-    color: '#cf1322',
-    desc:  'Denim worksuits, polyester worksuits, safety aprons, heavy duty work pants',
-  },
+  { value: 'school_wear',   label: 'School Wear' },
+  { value: 'knitwear',      label: 'Knitwear' },
+  { value: 'medical_wear',  label: 'Medical Wear' },
+  { value: 'outdoor_wear',  label: 'Outdoor Wear' },
+  { value: 'corporate_wear',label: 'Corporate Wear' },
+  { value: 'safety_wear',   label: 'Safety Wear' },
 ]
 
-export default function ProductsList() {
-  const qc = useQueryClient()
-  const [activeCategory, setActiveCategory] = useState(null)
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editing, setEditing] = useState(null)
+function ProductModal({ open, onClose, initial, onSave, loading }) {
   const [form] = Form.useForm()
+  const category = Form.useWatch('category', form)
+
+  function handleOk() {
+    form.validateFields().then(vals => {
+      onSave({ ...vals, sizes: (vals.sizes ?? '').split(',').map(s => s.trim()).filter(Boolean) })
+    })
+  }
+
+  return (
+    <Modal
+      title={initial ? 'Edit Product' : 'Add Product'}
+      open={open}
+      onCancel={onClose}
+      onOk={handleOk}
+      okText={initial ? 'Save' : 'Add'}
+      okButtonProps={{ loading }}
+      afterOpenChange={(v) => {
+        if (v && initial) {
+          form.setFieldsValue({
+            ...initial,
+            sizes: Array.isArray(initial.sizes) ? initial.sizes.join(', ') : '',
+          })
+        } else if (v) {
+          form.resetFields()
+        }
+      }}
+    >
+      <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form.Item label="Category" name="category" rules={[{ required: true }]}>
+          <Select options={CATEGORIES} placeholder="Select category" />
+        </Form.Item>
+
+        {category === 'school_wear' && (
+          <Form.Item label="School Name" name="schoolName">
+            <Input placeholder="e.g. Laerskool Dalview (leave blank for generic school wear)" />
+          </Form.Item>
+        )}
+
+        <Form.Item label="Product Name" name="name" rules={[{ required: true }]}>
+          <Input placeholder="e.g. Polo Shirt" />
+        </Form.Item>
+
+        <Form.Item label="Price (ZAR)" name="price" rules={[{ required: true }]}>
+          <InputNumber min={0} step={0.5} prefix="R" style={{ width: '100%' }} />
+        </Form.Item>
+
+        <Form.Item label="Sizes (comma-separated)" name="sizes" help='e.g. XS, S, M, L, XL or 6, 8, 10, 12'>
+          <Input placeholder="XS, S, M, L, XL" />
+        </Form.Item>
+
+        <Form.Item label="Description (optional)" name="description">
+          <Input.TextArea rows={2} />
+        </Form.Item>
+
+        <Form.Item label="Active" name="isActive" valuePropName="checked" initialValue={true}>
+          <Switch />
+        </Form.Item>
+      </Form>
+    </Modal>
+  )
+}
+
+export default function ProductsList() {
+  const qc        = useQueryClient()
+  const [editing, setEditing]   = useState(null)
+  const [adding,  setAdding]    = useState(false)
+  const [msgApi, ctx] = message.useMessage()
 
   const { data, isLoading } = useQuery({
     queryKey: ['products'],
-    queryFn: () => listProducts({}),
+    queryFn:  () => listProducts({}),
   })
 
-  const allProducts = data?.products ?? []
-  const categoryConfig = CATEGORIES.find((c) => c.key === activeCategory)
-  const categoryProducts = activeCategory
-    ? allProducts.filter((p) => p.category === activeCategory)
-    : []
-
-  const saveMutation = useMutation({
-    mutationFn: (values) => {
-      const payload = {
-        name:     values.name,
-        category: values.category,
-        price:    values.price,
-        currency: 'ZAR',
-        sizes:    values.sizes || [],
-      }
-      return editing ? updateProduct(editing.id, payload) : createProduct(payload)
-    },
+  const createMutation = useMutation({
+    mutationFn: createProduct,
     onSuccess: () => {
-      message.success(editing ? 'Product updated' : 'Product created')
-      setModalOpen(false)
-      setEditing(null)
-      form.resetFields()
+      msgApi.success('Product added')
+      setAdding(false)
       qc.invalidateQueries({ queryKey: ['products'] })
     },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Failed to save product'),
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed to add product'),
   })
 
-  const openCreate = () => {
-    setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({ category: activeCategory })
-    setModalOpen(true)
-  }
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => updateProduct(id, data),
+    onSuccess: () => {
+      msgApi.success('Product updated')
+      setEditing(null)
+      qc.invalidateQueries({ queryKey: ['products'] })
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed to update'),
+  })
 
-  const openEdit = (product) => {
-    setEditing(product)
-    form.setFieldsValue({
-      name:     product.name,
-      category: product.category,
-      price:    Number(product.price),
-      sizes:    Array.isArray(product.sizes) ? product.sizes : [],
-    })
-    setModalOpen(true)
-  }
+  const products = data?.products ?? []
 
   const columns = [
     {
       title: 'Name',
       dataIndex: 'name',
-      render: (v) => <Text strong>{v}</Text>,
+      render: (v, r) => (
+        <div>
+          <Text strong style={{ fontSize: 13 }}>{v}</Text>
+          {r.school_name && <div><Text type="secondary" style={{ fontSize: 11 }}>🏫 {r.school_name}</Text></div>}
+          {r.description && <div><Text type="secondary" style={{ fontSize: 11 }}>{r.description}</Text></div>}
+        </div>
+      ),
     },
     {
       title: 'Sizes',
       dataIndex: 'sizes',
-      render: (v) => {
-        const arr = Array.isArray(v) ? v : []
-        return arr.length
-          ? arr.map((s) => <Tag key={s}>{s}</Tag>)
-          : <Text type="secondary">—</Text>
-      },
+      render: (v) => Array.isArray(v) && v.length ? v.join(', ') : '—',
     },
     {
-      title: 'Unit Price',
+      title: 'Price',
       dataIndex: 'price',
-      render: (v) => v != null
-        ? <Text strong>R {Number(v).toFixed(2)}</Text>
-        : <Text type="secondary">—</Text>,
+      render: (v, r) => `${r.currency ?? 'ZAR'} ${Number(v).toFixed(2)}`,
+    },
+    {
+      title: 'Status',
+      dataIndex: 'is_active',
+      render: (v) => <Tag color={v ? 'green' : 'default'}>{v ? 'Active' : 'Inactive'}</Tag>,
     },
     {
       title: '',
-      key: 'actions',
-      width: 80,
-      render: (_, row) => (
-        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
+      render: (_, r) => (
+        <Button size="small" icon={<EditOutlined />} onClick={e => { e.stopPropagation(); setEditing(r) }}>
           Edit
         </Button>
       ),
     },
   ]
 
+  const tabItems = CATEGORIES.map(cat => ({
+    key:   cat.value,
+    label: cat.label,
+    children: (
+      <Table
+        dataSource={products.filter(p => p.category === cat.value)}
+        columns={columns}
+        rowKey="id"
+        size="small"
+        pagination={false}
+        loading={isLoading}
+      />
+    ),
+  }))
+
   return (
-    <div>
-      <Title level={4} style={{ marginBottom: 20 }}>Product Catalog</Title>
+    <>
+      {ctx}
 
-      <Row gutter={[16, 16]}>
-        {CATEGORIES.map((cat) => {
-          const count = allProducts.filter((p) => p.category === cat.key).length
-          return (
-            <Col xs={24} sm={12} lg={8} key={cat.key}>
-              <Card
-                hoverable
-                onClick={() => setActiveCategory(cat.key)}
-                style={{ borderRadius: 10, borderTop: `3px solid ${cat.color}`, cursor: 'pointer' }}
-                bodyStyle={{ padding: '20px 24px' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <div style={{
-                    width: 56, height: 56, borderRadius: 12, flexShrink: 0,
-                    background: `${cat.color}18`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: cat.color,
-                  }}>
-                    {cat.icon}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15 }}>{cat.label}</div>
-                    <div style={{ fontSize: 11, color: '#888', marginTop: 2, lineHeight: 1.4 }}>
-                      {cat.desc}
-                    </div>
-                    <Tag color={cat.color} style={{ marginTop: 8, fontSize: 11 }}>
-                      {count} product{count !== 1 ? 's' : ''}
-                    </Tag>
-                  </div>
-                </div>
-              </Card>
-            </Col>
-          )
-        })}
-      </Row>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Text style={{ fontSize: 18, fontWeight: 700 }}>Products</Text>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>
+          Add Product
+        </Button>
+      </div>
 
-      {/* Category drawer */}
-      <Drawer
-        title={
-          categoryConfig && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ color: categoryConfig.color }}>{categoryConfig.icon}</span>
-              <span>{categoryConfig.label}</span>
-            </div>
-          )
-        }
-        open={!!activeCategory}
-        onClose={() => setActiveCategory(null)}
-        width={700}
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            Add Product
-          </Button>
-        }
-      >
-        <Table
-          dataSource={categoryProducts}
-          columns={columns}
-          rowKey="id"
-          loading={isLoading}
-          size="middle"
-          pagination={{ pageSize: 20 }}
-          locale={{ emptyText: 'No products yet — click Add Product to get started.' }}
-        />
-      </Drawer>
+      <Card style={{ borderRadius: 10 }} bodyStyle={{ padding: '0 16px 16px' }}>
+        <Tabs items={tabItems} />
+      </Card>
 
-      {/* Add / Edit modal */}
-      <Modal
-        title={
-          editing
-            ? `Edit — ${editing.name}`
-            : `New Product — ${categoryConfig?.label ?? ''}`
-        }
-        open={modalOpen}
-        onCancel={() => { setModalOpen(false); setEditing(null); form.resetFields() }}
-        footer={null}
-        width={480}
-        destroyOnClose
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={(v) => saveMutation.mutate(v)}
-          style={{ marginTop: 16 }}
-        >
-          <Form.Item name="category" hidden><Input /></Form.Item>
+      <ProductModal
+        open={adding}
+        onClose={() => setAdding(false)}
+        onSave={(vals) => createMutation.mutate(vals)}
+        loading={createMutation.isPending}
+      />
 
-          <Form.Item name="name" label="Product Name" rules={[{ required: true, message: 'Required' }]}>
-            <Input placeholder="e.g. Polo Shirt" />
-          </Form.Item>
-
-          <Form.Item name="price" label="Unit Price (ZAR)" rules={[{ required: true, message: 'Required' }]}>
-            <InputNumber min={0} precision={2} prefix="R" style={{ width: '100%' }} />
-          </Form.Item>
-
-          <Form.Item name="sizes" label="Available Sizes">
-            <Checkbox.Group>
-              <Row gutter={[8, 8]}>
-                {SIZES.map((s) => (
-                  <Col key={s}>
-                    <Checkbox value={s}>{s}</Checkbox>
-                  </Col>
-                ))}
-              </Row>
-            </Checkbox.Group>
-          </Form.Item>
-
-          <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-            <Button
-              onClick={() => { setModalOpen(false); setEditing(null) }}
-              style={{ marginRight: 8 }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>
-              {editing ? 'Update' : 'Create'}
-            </Button>
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
+      <ProductModal
+        open={!!editing}
+        initial={editing}
+        onClose={() => setEditing(null)}
+        onSave={(vals) => updateMutation.mutate({ id: editing?.id, data: vals })}
+        loading={updateMutation.isPending}
+      />
+    </>
   )
 }

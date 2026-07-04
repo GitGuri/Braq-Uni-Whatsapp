@@ -26,3 +26,6 @@ export const assignConversation = (id, staffId) =>
 
 export const markConversationRead = (id) =>
   api.patch(`/conversations/${id}/read`).then((r) => r.data)
+
+export const claimConversation = (id) =>
+  api.post(`/conversations/${id}/claim`).then((r) => r.data)

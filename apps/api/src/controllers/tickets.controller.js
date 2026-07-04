@@ -2,6 +2,7 @@ import { z } from 'zod';
 import * as ticketsService from '../services/tickets.service.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
+import { query } from '../db/pool.js';
 
 const UpdateTicketSchema = z.object({
   status:         z.enum(['open', 'in_progress', 'resolved', 'closed']).optional(),
@@ -29,6 +30,37 @@ export async function getById(req, res) {
     res.json({ ticket });
   } catch (err) {
     handleError(res, err, 'Failed to fetch ticket');
+  }
+}
+
+// ── POST /tickets/:id/claim ───────────────────────────────────────────────────
+export async function claim(req, res) {
+  try {
+    const { rows } = await query(
+      `UPDATE tickets
+       SET assigned_staff_id = $1, claimed_at = NOW(), updated_at = NOW()
+       WHERE id = $2 AND assigned_staff_id IS NULL
+       RETURNING *`,
+      [req.staff.id, req.params.id]
+    );
+
+    if (rows.length) return res.json({ ticket: rows[0] });
+
+    const { rows: current } = await query(
+      `SELECT t.id, s.name AS claimer_name
+       FROM tickets t
+       LEFT JOIN staff s ON s.id = t.assigned_staff_id
+       WHERE t.id = $1`,
+      [req.params.id]
+    );
+    if (!current.length) return res.status(404).json({ error: 'Ticket not found' });
+
+    return res.status(409).json({
+      error: `Already claimed by ${current[0].claimer_name ?? 'another consultant'}`,
+    });
+  } catch (err) {
+    logger.error('Failed to claim ticket', { error: err.message });
+    res.status(500).json({ error: 'Failed to claim ticket' });
   }
 }
 

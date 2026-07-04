@@ -3,411 +3,354 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Card, Descriptions, Button, Tag, Space, Typography, Modal, Form, Input,
-  Select, InputNumber, Timeline, Table, Spin, Alert, message, Upload, Divider,
-  Row, Col, Statistic,
+  Select, InputNumber, Table, Spin, message, Divider, Row, Col, Switch, Alert,
 } from 'antd'
 import {
-  ArrowRightOutlined, ClockCircleOutlined, DollarOutlined,
-  UploadOutlined, ArrowLeftOutlined, UserOutlined, WarningOutlined,
-  CheckCircleOutlined,
+  ArrowRightOutlined, DollarOutlined, StopOutlined, UserOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import {
-  getOrder, advanceStage, delayOrder, assignOrder,
-  recordPayment, listPayments, listSizes, uploadSizes,
-} from '../../api/orders.js'
-import { listStaff } from '../../api/staff.js'
-import StageTag from '../../components/StageTag.jsx'
-import OrderProgress from '../../components/OrderProgress.jsx'
+import { getOrder, advanceStage, setHold, recordPayment, assignOrder } from '../../api/orders.js'
 
-const { Title, Text } = Typography
+const { Text, Title } = Typography
+
+const STAGES = [
+  'quotation_requested', 'quotation_submitted', 'po_received',
+  'materials_procurement', 'production_scheduled', 'manufacturing',
+  'branding_embroidery', 'quality_control', 'packing_dispatch', 'completed',
+]
+
+const STAGE_LABELS = {
+  quotation_requested:   '1. Quotation Requested',
+  quotation_submitted:   '2. Quotation Submitted',
+  po_received:           '3. PO Received',
+  materials_procurement: '4. Materials Procurement',
+  production_scheduled:  '5. Production Scheduled',
+  manufacturing:         '6. Manufacturing',
+  branding_embroidery:   '7. Branding & Embroidery',
+  quality_control:       '8. Quality Control',
+  packing_dispatch:      '9. Packing & Dispatch',
+  completed:             '10. Completed',
+}
+
+const STAGE_COLORS = {
+  quotation_requested: 'default', quotation_submitted: 'blue',
+  po_received: 'cyan', materials_procurement: 'geekblue',
+  production_scheduled: 'purple', manufacturing: 'magenta',
+  branding_embroidery: 'volcano', quality_control: 'orange',
+  packing_dispatch: 'gold', completed: 'green',
+}
 
 export default function OrderDetail() {
-  const { id } = useParams()
-  const navigate = useNavigate()
-  const qc = useQueryClient()
-
-  const [advanceOpen, setAdvanceOpen] = useState(false)
-  const [delayOpen, setDelayOpen] = useState(false)
-  const [paymentOpen, setPaymentOpen] = useState(false)
-  const [assignOpen, setAssignOpen] = useState(false)
+  const { id }    = useParams()
+  const navigate  = useNavigate()
+  const qc        = useQueryClient()
+  const [advanceModal, setAdvanceModal]   = useState(false)
+  const [paymentModal, setPaymentModal]   = useState(false)
+  const [holdModal, setHoldModal]         = useState(false)
   const [advanceForm] = Form.useForm()
-  const [delayForm] = Form.useForm()
   const [paymentForm] = Form.useForm()
+  const [holdForm]    = Form.useForm()
+  const [msgApi, ctx] = message.useMessage()
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['order', id],
     queryFn: () => getOrder(id),
   })
 
-  const { data: paymentsData } = useQuery({
-    queryKey: ['order-payments', id],
-    queryFn: () => listPayments(id),
-  })
-
-  const { data: sizesData } = useQuery({
-    queryKey: ['order-sizes', id],
-    queryFn: () => listSizes(id),
-  })
-
-  const { data: staffData } = useQuery({
-    queryKey: ['staff-list'],
-    queryFn: listStaff,
-    enabled: assignOpen,
-  })
-
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['order', id] })
-
-  const [advanceError, setAdvanceError] = useState(null)
-
   const advanceMutation = useMutation({
-    mutationFn: (values) => advanceStage(id, values),
-    onSuccess: () => {
-      message.success('Stage advanced')
-      setAdvanceOpen(false)
-      setAdvanceError(null)
-      advanceForm.resetFields()
-      invalidate()
+    mutationFn: (vals) => advanceStage(id, vals),
+    onSuccess: (res) => {
+      msgApi.success(`Moved to: ${STAGE_LABELS[res.to] ?? res.to}`)
+      setAdvanceModal(false)
+      qc.invalidateQueries({ queryKey: ['order', id] })
     },
-    onError: (err) => {
-      const resp = err.response?.data
-      if (resp?.missing?.length) {
-        setAdvanceError(resp)
-      } else {
-        message.error(resp?.error ?? 'Failed to advance stage')
-      }
-    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Advance failed'),
   })
 
-  const delayMutation = useMutation({
-    mutationFn: (values) => delayOrder(id, values),
-    onSuccess: () => { message.success('Order flagged as delayed'); setDelayOpen(false); delayForm.resetFields(); invalidate() },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Failed to flag delay'),
+  const holdMutation = useMutation({
+    mutationFn: (vals) => setHold(id, vals),
+    onSuccess: () => {
+      setHoldModal(false)
+      qc.invalidateQueries({ queryKey: ['order', id] })
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed'),
   })
 
   const paymentMutation = useMutation({
-    mutationFn: (values) => recordPayment(id, values),
+    mutationFn: (vals) => recordPayment(id, vals),
     onSuccess: () => {
-      message.success('Payment recorded')
-      setPaymentOpen(false)
-      paymentForm.resetFields()
-      invalidate()
-      qc.invalidateQueries({ queryKey: ['order-payments', id] })
+      msgApi.success('Payment recorded')
+      setPaymentModal(false)
+      qc.invalidateQueries({ queryKey: ['order', id] })
     },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Failed to record payment'),
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed'),
   })
 
-  const assignMutation = useMutation({
-    mutationFn: (staffId) => assignOrder(id, staffId),
-    onSuccess: () => { message.success('Consultant assigned'); setAssignOpen(false); invalidate() },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Failed to assign'),
-  })
+  if (isLoading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
 
-  const uploadMutation = useMutation({
-    mutationFn: (file) => uploadSizes(id, file),
-    onSuccess: () => {
-      message.success('Size roster uploaded')
-      qc.invalidateQueries({ queryKey: ['order-sizes', id] })
-    },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Upload failed'),
-  })
+  const order    = data?.order
+  const payments = data?.payments ?? []
+  if (!order) return <Text type="danger">Order not found.</Text>
 
-  if (isLoading) return <Spin size="large" style={{ display: 'block', marginTop: 80 }} />
-  if (error) return <Alert type="error" message="Failed to load order" />
+  const stageIdx    = STAGES.indexOf(order.stage)
+  const nextStageName = stageIdx >= 0 && stageIdx < STAGES.length - 1 ? STAGES[stageIdx + 1] : null
+  const isCompleted = order.stage === 'completed'
 
-  const { order, history: stageHistory, validation } = data
-  const payments = paymentsData?.payments ?? []
-  const sizes = sizesData?.entries ?? []
-  const staffList = staffData?.staff ?? []
-  const requirementsMet = validation?.canAdvance !== false
-  const requirementsMissing = validation?.missing ?? []
+  const lineItems = (() => {
+    try {
+      const q = data?.quotation
+      if (q?.line_items) return Array.isArray(q.line_items) ? q.line_items : []
+    } catch {}
+    return []
+  })()
 
-  const paymentColumns = [
-    { title: 'Type', dataIndex: 'payment_type', render: (v) => <Tag color="blue">{v}</Tag> },
-    { title: 'Amount', dataIndex: 'amount', render: (v) => <Text strong>R {Number(v).toFixed(2)}</Text> },
+  const paymentCols = [
+    { title: 'Type', dataIndex: 'type', render: (v) => <Tag>{v}</Tag> },
+    { title: 'Amount', dataIndex: 'amount', render: (v) => `R ${Number(v).toFixed(2)}` },
+    { title: 'Currency', dataIndex: 'currency' },
     { title: 'Notes', dataIndex: 'notes', render: (v) => v ?? '—' },
-    { title: 'Date', dataIndex: 'received_at', render: (v) => dayjs(v).format('DD MMM YYYY') },
-  ]
-
-  const sizeColumns = [
-    { title: 'Name', dataIndex: 'person_name' },
-    { title: 'Size', dataIndex: 'size', render: (v) => <Tag>{v}</Tag> },
-    { title: 'Notes', dataIndex: 'notes', render: (v) => v ?? '—' },
+    { title: 'Date', dataIndex: 'created_at', render: (v) => dayjs(v).format('DD MMM YYYY HH:mm') },
   ]
 
   return (
-    <div>
-      <Button
-        icon={<ArrowLeftOutlined />}
-        onClick={() => navigate('/orders')}
-        style={{ marginBottom: 16 }}
-      >
-        Back to Orders
+    <>
+      {ctx}
+      <Button type="link" onClick={() => navigate(-1)} style={{ paddingLeft: 0, marginBottom: 12 }}>
+        ← Back to Orders
       </Button>
 
-      <Card
-        title={
-          <Space>
-            <Title level={4} style={{ margin: 0 }}>{order.reference}</Title>
-            <StageTag stage={order.stage} />
-            {order.is_urgent && <Tag color="red">Urgent</Tag>}
-            {order.is_delayed && <Tag color="orange">Delayed</Tag>}
-          </Space>
-        }
-        extra={
-          <Space>
-            <Button onClick={() => setAssignOpen(true)} icon={<UserOutlined />}>
-              Assign
-            </Button>
-            <Button onClick={() => setDelayOpen(true)} icon={<ClockCircleOutlined />} danger>
-              Flag Delay
-            </Button>
-            <Button onClick={() => setPaymentOpen(true)} icon={<DollarOutlined />}>
-              Record Payment
-            </Button>
-            <Button
-              type="primary"
-              onClick={() => { setAdvanceError(null); setAdvanceOpen(true) }}
-              icon={requirementsMet ? <ArrowRightOutlined /> : <WarningOutlined />}
-              disabled={order.stage === 'completed'}
-              danger={!requirementsMet && order.stage !== 'quotation_requested'}
-            >
-              {requirementsMet ? 'Advance Stage' : 'Advance Stage (blocked)'}
-            </Button>
-          </Space>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <div style={{ marginBottom: 16 }}>
-          <OrderProgress stage={order.stage} />
-        </div>
-
-        {/* Requirements panel — shown when the advance gate is not yet met */}
-        {!requirementsMet && requirementsMissing.length > 0 && (
-          <Alert
-            type="warning"
-            icon={<WarningOutlined />}
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="Stage advance blocked — resolve the following first"
-            description={
-              <ul style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
-                {requirementsMissing.map((m, i) => (
-                  <li key={i} style={{ fontSize: 13 }}>{m}</li>
-                ))}
-              </ul>
-            }
-          />
-        )}
-        {requirementsMet && order.stage !== 'completed' && order.stage !== 'quotation_requested' && (
-          <Alert
-            type="success"
-            icon={<CheckCircleOutlined />}
-            showIcon
-            message="All requirements met — ready to advance"
-            style={{ marginBottom: 16 }}
-          />
-        )}
-
-        <Descriptions bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
-          <Descriptions.Item label="Client">{order.client_name ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="WhatsApp">{order.client_wa_id ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="Client Type">
-            <Tag>{order.client_type}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Assigned To">{order.assigned_name ?? 'Unassigned'}</Descriptions.Item>
-          <Descriptions.Item label="Payment Status">
-            <Tag color={order.payment_status === 'paid' ? 'success' : 'warning'}>
-              {order.payment_status}
-            </Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Quantity">{order.quantity ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="Est. Completion">
-            {order.estimated_completion ? dayjs(order.estimated_completion).format('DD MMM YYYY') : '—'}
-          </Descriptions.Item>
-          <Descriptions.Item label="Created">
-            {dayjs(order.created_at).format('DD MMM YYYY HH:mm')}
-          </Descriptions.Item>
-          <Descriptions.Item label="Description" span={3}>
-            {order.description}
-          </Descriptions.Item>
-          {order.special_notes && (
-            <Descriptions.Item label="Special Notes" span={3}>
-              {order.special_notes}
-            </Descriptions.Item>
-          )}
-        </Descriptions>
-      </Card>
+      {order.is_on_hold && (
+        <Alert
+          type="warning"
+          showIcon
+          message={`Order on hold${order.hold_reason ? ` — ${order.hold_reason}` : ''}`}
+          style={{ marginBottom: 16, borderRadius: 8 }}
+        />
+      )}
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} lg={12}>
+        {/* Order info */}
+        <Col span={16}>
           <Card
-            title="Stage History"
-            size="small"
-            style={{ marginBottom: 16 }}
+            title={
+              <Space>
+                <Text strong style={{ fontSize: 16 }}>{order.reference}</Text>
+                <Tag color={STAGE_COLORS[order.stage] ?? 'default'} style={{ fontSize: 12 }}>
+                  {STAGE_LABELS[order.stage] ?? order.stage}
+                </Tag>
+              </Space>
+            }
+            extra={
+              <Space>
+                {!isCompleted && !order.is_on_hold && (
+                  <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setAdvanceModal(true)}>
+                    Advance Stage
+                  </Button>
+                )}
+                <Button
+                  icon={<StopOutlined />}
+                  danger={!order.is_on_hold}
+                  onClick={() => { holdForm.resetFields(); setHoldModal(true) }}
+                >
+                  {order.is_on_hold ? 'Release Hold' : 'Put on Hold'}
+                </Button>
+              </Space>
+            }
+            style={{ borderRadius: 10 }}
           >
-            <Timeline
-              items={(stageHistory ?? []).map((h) => ({
-                children: (
-                  <div>
-                    <StageTag stage={h.to_stage} />
-                    <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                      {dayjs(h.created_at).format('DD MMM HH:mm')}
-                      {h.staff_name ? ` — ${h.staff_name}` : ''}
-                    </Text>
-                    {h.notes && <div style={{ fontSize: 12, color: '#666' }}>{h.notes}</div>}
-                  </div>
-                ),
-              }))}
-            />
+            <Descriptions column={2} size="small">
+              <Descriptions.Item label="Client">{order.client_name ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Organisation">{order.organisation ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Client Type"><Tag>{order.client_type}</Tag></Descriptions.Item>
+              <Descriptions.Item label="PO Number">{order.po_number ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Tracking Number">{order.tracking_number ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="Est. Completion">
+                {order.estimated_completion_date ? dayjs(order.estimated_completion_date).format('DD MMM YYYY') : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Payment Status">
+                <Tag color={
+                  order.payment_status === 'paid_in_full' ? 'green'
+                  : order.payment_status === 'deposit_paid' ? 'orange' : 'default'
+                }>
+                  {order.payment_status?.replace(/_/g, ' ')}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Created">{dayjs(order.created_at).format('DD MMM YYYY HH:mm')}</Descriptions.Item>
+            </Descriptions>
           </Card>
+
+          {/* Stage progress bar */}
+          <Card style={{ marginTop: 16, borderRadius: 10 }}>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', overflowX: 'auto' }}>
+              {STAGES.map((s, i) => {
+                const done    = i < stageIdx
+                const current = i === stageIdx
+                return (
+                  <div
+                    key={s}
+                    style={{
+                      flex: '1 1 0', minWidth: 60, textAlign: 'center', padding: '6px 4px',
+                      background: current ? '#1677ff' : done ? '#e6f4ff' : '#f5f5f5',
+                      borderRadius: 6,
+                    }}
+                  >
+                    <Text style={{ fontSize: 10, color: current ? '#fff' : done ? '#1677ff' : '#aaa', fontWeight: current ? 700 : 400 }}>
+                      {i + 1}
+                    </Text>
+                  </div>
+                )
+              })}
+            </div>
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
+              Step {stageIdx + 1} of {STAGES.length}: {STAGE_LABELS[order.stage]}
+            </Text>
+          </Card>
+
+          {/* Line items from quotation */}
+          {lineItems.length > 0 && (
+            <Card title="Line Items" style={{ marginTop: 16, borderRadius: 10 }}>
+              <Table
+                dataSource={lineItems}
+                rowKey={(r, i) => i}
+                size="small"
+                pagination={false}
+                columns={[
+                  { title: 'Item', render: (_, r) => r.name ?? r.description },
+                  { title: 'Qty', dataIndex: 'quantity' },
+                  { title: 'Sizes', dataIndex: 'sizes', render: v => v ?? '—' },
+                  { title: 'Unit Price', dataIndex: 'price', render: v => `R ${Number(v).toFixed(2)}` },
+                  { title: 'Total', dataIndex: 'lineTotal', render: v => `R ${Number(v).toFixed(2)}` },
+                ]}
+              />
+            </Card>
+          )}
         </Col>
 
-        <Col xs={24} lg={12}>
-          <Card title="Payments" size="small" style={{ marginBottom: 16 }}>
-            <Table
-              dataSource={payments}
-              columns={paymentColumns}
-              rowKey="id"
-              size="small"
-              pagination={false}
-              locale={{ emptyText: 'No payments recorded' }}
-            />
+        {/* Payments sidebar */}
+        <Col span={8}>
+          <Card
+            title="Payments"
+            extra={
+              <Button size="small" icon={<DollarOutlined />} onClick={() => { paymentForm.resetFields(); setPaymentModal(true) }}>
+                Record
+              </Button>
+            }
+            style={{ borderRadius: 10 }}
+          >
+            {order.deposit_amount && (
+              <div style={{ marginBottom: 12 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>Deposit (50%)</Text>
+                <div><Text strong>R {Number(order.deposit_amount).toFixed(2)}</Text></div>
+                <Text type="secondary" style={{ fontSize: 12 }}>Balance</Text>
+                <div><Text strong>R {Number(order.balance_amount ?? 0).toFixed(2)}</Text></div>
+              </div>
+            )}
+            <Divider style={{ margin: '8px 0' }} />
+            {payments.length === 0 ? (
+              <Text type="secondary" style={{ fontSize: 13 }}>No payments recorded yet.</Text>
+            ) : (
+              payments.map(p => (
+                <div key={p.id} style={{ marginBottom: 10 }}>
+                  <Space>
+                    <Tag>{p.type}</Tag>
+                    <Text strong>R {Number(p.amount).toFixed(2)}</Text>
+                  </Space>
+                  <div><Text type="secondary" style={{ fontSize: 11 }}>{dayjs(p.created_at).format('DD MMM YYYY')}</Text></div>
+                  {p.notes && <Text type="secondary" style={{ fontSize: 12 }}>{p.notes}</Text>}
+                </div>
+              ))
+            )}
           </Card>
         </Col>
       </Row>
 
-      <Card
-        title="Size Roster"
-        size="small"
-        extra={
-          <Upload
-            accept=".xlsx,.csv"
-            showUploadList={false}
-            beforeUpload={(file) => { uploadMutation.mutate(file); return false }}
-          >
-            <Button icon={<UploadOutlined />} loading={uploadMutation.isPending} size="small">
-              Upload Roster (.xlsx / .csv)
-            </Button>
-          </Upload>
-        }
-      >
-        <Table
-          dataSource={sizes}
-          columns={sizeColumns}
-          rowKey="id"
-          size="small"
-          pagination={false}
-          locale={{ emptyText: 'No size roster uploaded yet' }}
-        />
-      </Card>
-
       {/* Advance Stage Modal */}
       <Modal
-        title="Advance to Next Stage"
-        open={advanceOpen}
-        onCancel={() => { setAdvanceOpen(false); setAdvanceError(null) }}
-        footer={null}
+        title={`Advance to: ${nextStageName ? STAGE_LABELS[nextStageName] : '—'}`}
+        open={advanceModal}
+        onCancel={() => setAdvanceModal(false)}
+        onOk={() => advanceMutation.mutate(advanceForm.getFieldsValue())}
+        okText="Advance"
+        okButtonProps={{ loading: advanceMutation.isPending }}
       >
-        {advanceError && (
-          <Alert
-            type="error"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message={advanceError.error}
-            description={
-              <ul style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
-                {advanceError.missing.map((m, i) => <li key={i} style={{ fontSize: 13 }}>{m}</li>)}
-              </ul>
-            }
-          />
-        )}
-        <Form form={advanceForm} layout="vertical" onFinish={(v) => advanceMutation.mutate(v)}>
-          <Form.Item name="notes" label="Notes (optional)">
+        <Form form={advanceForm} layout="vertical" style={{ marginTop: 12 }}>
+          <Form.Item label="Notes (optional)" name="notes">
             <Input.TextArea rows={2} />
           </Form.Item>
-          <Form.Item name="estimatedCompletion" label="Updated Est. Completion (optional)">
-            <Input placeholder="e.g. 2025-08-20" />
+          <Form.Item label="Estimated Completion Date" name="estimatedCompletion">
+            <Input type="date" />
           </Form.Item>
-          <Form.Item name="trackingNumber" label="Tracking Number (for dispatch)">
-            <Input />
-          </Form.Item>
-          <Form.Item name="deliveryType" label="Delivery Type" initialValue="collection">
-            <Select options={[{ value: 'collection', label: 'Collection' }, { value: 'delivery', label: 'Delivery' }]} />
-          </Form.Item>
-          <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-            <Button onClick={() => setAdvanceOpen(false)} style={{ marginRight: 8 }}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={advanceMutation.isPending}>Advance Stage</Button>
-          </Form.Item>
+          {nextStageName === 'packing_dispatch' && (
+            <Form.Item label="Tracking Number" name="trackingNumber">
+              <Input placeholder="Courier tracking number" />
+            </Form.Item>
+          )}
+          {nextStageName === 'completed' && (
+            <Form.Item label="Delivery Type" name="deliveryType" initialValue="collection">
+              <Select options={[
+                { value: 'collection', label: 'Collection' },
+                { value: 'delivery', label: 'Delivery' },
+              ]} />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
 
-      {/* Flag Delay Modal */}
+      {/* Hold Modal */}
       <Modal
-        title="Flag Order as Delayed"
-        open={delayOpen}
-        onCancel={() => setDelayOpen(false)}
-        footer={null}
+        title={order.is_on_hold ? 'Release Hold' : 'Put Order on Hold'}
+        open={holdModal}
+        onCancel={() => setHoldModal(false)}
+        onOk={() => holdMutation.mutate({ isOnHold: !order.is_on_hold, holdReason: holdForm.getFieldValue('holdReason') })}
+        okText={order.is_on_hold ? 'Release' : 'Hold'}
+        okButtonProps={{ loading: holdMutation.isPending, danger: !order.is_on_hold }}
       >
-        <Form form={delayForm} layout="vertical" onFinish={(v) => delayMutation.mutate(v)}>
-          <Form.Item name="reason" label="Reason for delay">
-            <Input.TextArea rows={3} placeholder="Explain the delay to the client..." />
-          </Form.Item>
-          <Form.Item name="newEstimate" label="New estimated completion (optional)">
-            <Input placeholder="e.g. 2025-08-30" />
-          </Form.Item>
-          <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-            <Button onClick={() => setDelayOpen(false)} style={{ marginRight: 8 }}>Cancel</Button>
-            <Button danger htmlType="submit" loading={delayMutation.isPending}>Flag Delay & Notify Client</Button>
-          </Form.Item>
-        </Form>
+        {!order.is_on_hold && (
+          <Form form={holdForm} layout="vertical" style={{ marginTop: 12 }}>
+            <Form.Item label="Reason" name="holdReason">
+              <Select
+                placeholder="Select reason"
+                options={[
+                  { value: 'supplier_delay', label: 'Supplier Delay (auto-notifies client)' },
+                  { value: 'payment_outstanding', label: 'Payment Outstanding' },
+                  { value: 'design_revision', label: 'Design Revision' },
+                  { value: 'client_request', label: 'Client Request' },
+                  { value: 'other', label: 'Other' },
+                ]}
+              />
+            </Form.Item>
+          </Form>
+        )}
+        {order.is_on_hold && (
+          <Text>Are you sure you want to release the hold on this order?</Text>
+        )}
       </Modal>
 
       {/* Record Payment Modal */}
       <Modal
         title="Record Payment"
-        open={paymentOpen}
-        onCancel={() => setPaymentOpen(false)}
-        footer={null}
+        open={paymentModal}
+        onCancel={() => setPaymentModal(false)}
+        onOk={() => paymentMutation.mutate(paymentForm.getFieldsValue())}
+        okText="Record Payment"
+        okButtonProps={{ loading: paymentMutation.isPending }}
       >
-        <Form form={paymentForm} layout="vertical" onFinish={(v) => paymentMutation.mutate(v)}>
-          <Form.Item name="type" label="Payment Type" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { value: 'deposit', label: 'Deposit' },
-                { value: 'balance', label: 'Balance' },
-                { value: 'full', label: 'Full Payment' },
-              ]}
-            />
+        <Form form={paymentForm} layout="vertical" style={{ marginTop: 12 }}>
+          <Form.Item label="Payment Type" name="type" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'deposit', label: 'Deposit' },
+              { value: 'balance', label: 'Balance' },
+              { value: 'full', label: 'Full Payment' },
+            ]} />
           </Form.Item>
-          <Form.Item name="amount" label="Amount (R)" rules={[{ required: true }]}>
-            <InputNumber min={0.01} precision={2} prefix="R" style={{ width: '100%' }} />
+          <Form.Item label="Amount (R)" name="amount" rules={[{ required: true }]}>
+            <InputNumber min={0} step={0.01} style={{ width: '100%' }} prefix="R" />
           </Form.Item>
-          <Form.Item name="notes" label="Notes (optional)">
-            <Input />
-          </Form.Item>
-          <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-            <Button onClick={() => setPaymentOpen(false)} style={{ marginRight: 8 }}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={paymentMutation.isPending}>Record Payment</Button>
+          <Form.Item label="Notes (optional)" name="notes">
+            <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
       </Modal>
-
-      {/* Assign Modal */}
-      <Modal
-        title="Assign Consultant"
-        open={assignOpen}
-        onCancel={() => setAssignOpen(false)}
-        footer={null}
-      >
-        <Select
-          style={{ width: '100%', marginTop: 8 }}
-          placeholder="Select staff member"
-          options={(staffList).map((s) => ({ value: s.id, label: `${s.name} (${s.role})` }))}
-          onChange={(v) => assignMutation.mutate(v)}
-          loading={assignMutation.isPending}
-        />
-      </Modal>
-    </div>
+    </>
   )
 }

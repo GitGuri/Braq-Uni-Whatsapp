@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Table, Card, Typography, Tag, Select, Row, Col } from 'antd'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Table, Card, Typography, Tag, Select, Row, Col, Button, Space, message } from 'antd'
+import { UserOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { listTickets } from '../../api/tickets.js'
+import { listTickets, claimTicket } from '../../api/tickets.js'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 const STATUS_COLORS = {
   open:        'processing',
@@ -15,19 +16,32 @@ const STATUS_COLORS = {
 }
 
 const CATEGORY_LABELS = {
-  wrong_item:   'Wrong item',
-  defective:    'Defective',
-  missing_item: 'Missing item',
-  other:        'Other',
+  wrong_item:    'Wrong item',
+  defective:     'Defective',
+  missing_item:  'Missing item',
+  account_query: 'Account Query',
+  other:         'Other',
 }
 
 export default function TicketsList() {
   const navigate = useNavigate()
+  const qc       = useQueryClient()
   const [filters, setFilters] = useState({ limit: 50 })
+  const [msgApi, ctx] = message.useMessage()
 
   const { data, isLoading } = useQuery({
     queryKey: ['tickets', filters],
     queryFn: () => listTickets(filters),
+  })
+
+  const claimMutation = useMutation({
+    mutationFn: (id) => claimTicket(id),
+    onSuccess: () => {
+      msgApi.success('Ticket claimed!')
+      qc.invalidateQueries({ queryKey: ['tickets'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-kpis'] })
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Claim failed'),
   })
 
   const tickets = data?.tickets ?? []
@@ -69,10 +83,23 @@ export default function TicketsList() {
       ),
     },
     {
-      title: 'Assigned To',
+      title: 'Assigned',
       key: 'assigned',
       render: (_, row) =>
-        row.assigned_name ?? <Text type="secondary">Unassigned</Text>,
+        row.assigned_name ? (
+          <Space size={4}>
+            <UserOutlined style={{ color: '#999' }} />
+            <Text type="secondary" style={{ fontSize: 12 }}>{row.assigned_name}</Text>
+          </Space>
+        ) : (
+          <Button
+            size="small"
+            loading={claimMutation.isPending && claimMutation.variables === row.id}
+            onClick={(e) => { e.stopPropagation(); claimMutation.mutate(row.id) }}
+          >
+            Claim
+          </Button>
+        ),
     },
     {
       title: 'SLA',
@@ -101,7 +128,10 @@ export default function TicketsList() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}>Support Tickets</Title>
+      {ctx}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Text style={{ fontSize: 18, fontWeight: 700 }}>Support Tickets</Text>
+      </div>
 
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={[12, 12]}>

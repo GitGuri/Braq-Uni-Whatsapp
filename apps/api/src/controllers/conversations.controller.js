@@ -215,6 +215,36 @@ export async function handback(req, res) {
   }
 }
 
+// ── POST /conversations/:id/claim ────────────────────────────────────────────
+export async function claim(req, res) {
+  try {
+    const { rows } = await query(
+      `UPDATE conversations
+       SET assigned_staff_id = $1, claimed_at = NOW(), updated_at = NOW()
+       WHERE id = $2 AND assigned_staff_id IS NULL
+       RETURNING *`,
+      [req.staff.id, req.params.id]
+    );
+
+    if (rows.length) return res.json({ conversation: rows[0] });
+
+    const { rows: current } = await query(
+      `SELECT cv.id, s.name AS claimer_name
+       FROM conversations cv
+       LEFT JOIN staff s ON s.id = cv.assigned_staff_id
+       WHERE cv.id = $1`,
+      [req.params.id]
+    );
+    if (!current.length) return res.status(404).json({ error: 'Conversation not found' });
+
+    return res.status(409).json({
+      error: `Already claimed by ${current[0].claimer_name ?? 'another consultant'}`,
+    });
+  } catch (err) {
+    handleError(res, err, 'Failed to claim conversation');
+  }
+}
+
 // ── PATCH /conversations/:id/close ───────────────────────────────────────────
 export async function close(req, res) {
   try {

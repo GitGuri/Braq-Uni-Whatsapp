@@ -3,23 +3,26 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Card, Descriptions, Button, Tag, Typography, Table, Form, Input,
-  Select, Spin, Alert, message, Space, Modal,
+  Select, Spin, Alert, message, Space, Modal, Tabs,
 } from 'antd'
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { getClient, updateClient } from '../../api/clients.js'
 import StageTag from '../../components/StageTag.jsx'
 
-const { Title } = Typography
+const { Text } = Typography
 
-const CLIENT_TYPES = ['retail', 'school', 'corporate', 'hospitality', 'church', 'security', 'government', 'reseller']
+const STATUS_COLORS = {
+  draft: 'orange', sent: 'blue', accepted: 'green', rejected: 'red',
+}
 
 export default function ClientDetail() {
-  const { id } = useParams()
-  const navigate = useNavigate()
-  const qc = useQueryClient()
+  const { id }    = useParams()
+  const navigate  = useNavigate()
+  const qc        = useQueryClient()
   const [editOpen, setEditOpen] = useState(false)
-  const [form] = Form.useForm()
+  const [form]    = Form.useForm()
+  const [msgApi, ctx] = message.useMessage()
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['client', id],
@@ -29,125 +32,188 @@ export default function ClientDetail() {
   const updateMutation = useMutation({
     mutationFn: (values) => updateClient(id, values),
     onSuccess: () => {
-      message.success('Client updated')
+      msgApi.success('Client updated')
       setEditOpen(false)
       qc.invalidateQueries({ queryKey: ['client', id] })
     },
-    onError: (err) => message.error(err.response?.data?.error ?? 'Update failed'),
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Update failed'),
   })
 
-  if (isLoading) return <Spin size="large" style={{ display: 'block', marginTop: 80 }} />
-  if (error) return <Alert type="error" message="Failed to load client" />
+  if (isLoading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
+  if (error)     return <Alert type="error" message="Failed to load client" />
 
-  const { client, orders } = data
+  const { client, orders = [], quotations = [] } = data
 
   const orderColumns = [
     {
       title: 'Reference',
       dataIndex: 'reference',
-      render: (ref, row) => <a onClick={() => navigate(`/orders/${row.id}`)}>{ref}</a>,
+      render: (ref, row) => (
+        <a style={{ fontFamily: 'monospace', fontWeight: 600 }} onClick={() => navigate(`/orders/${row.id}`)}>
+          {ref}
+        </a>
+      ),
     },
     { title: 'Stage', dataIndex: 'stage', render: (s) => <StageTag stage={s} /> },
     {
-      title: 'Flags',
-      render: (_, row) => (
-        <Space size={4}>
-          {row.is_urgent && <Tag color="red">Urgent</Tag>}
-          {row.is_delayed && <Tag color="orange">Delayed</Tag>}
-        </Space>
+      title: 'Status',
+      render: (_, r) => r.is_on_hold ? <Tag color="red">On Hold</Tag> : null,
+    },
+    {
+      title: 'Payment',
+      dataIndex: 'payment_status',
+      render: (v) => (
+        <Tag color={v === 'paid_in_full' ? 'green' : v === 'deposit_paid' ? 'orange' : 'default'}>
+          {v?.replace(/_/g, ' ')}
+        </Tag>
       ),
     },
-    { title: 'Created', dataIndex: 'created_at', render: (v) => dayjs(v).format('DD MMM YYYY') },
+    {
+      title: 'Created',
+      dataIndex: 'created_at',
+      render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(v).format('DD MMM YYYY')}</Text>,
+    },
   ]
 
-  return (
-    <div>
-      <Button
-        icon={<ArrowLeftOutlined />}
-        onClick={() => navigate('/clients')}
-        style={{ marginBottom: 16 }}
-      >
-        Back to Clients
-      </Button>
+  const quotationColumns = [
+    {
+      title: 'Reference',
+      dataIndex: 'reference',
+      render: (v) => <Text strong style={{ fontFamily: 'monospace' }}>{v}</Text>,
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      render: (s) => <Tag color={STATUS_COLORS[s] ?? 'default'}>{s}</Tag>,
+    },
+    {
+      title: 'Total',
+      dataIndex: 'total',
+      render: (v) => v != null ? `R ${Number(v).toFixed(2)}` : '—',
+    },
+    {
+      title: 'Date',
+      dataIndex: 'created_at',
+      render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{dayjs(v).format('DD MMM YYYY')}</Text>,
+    },
+  ]
 
-      <Card
-        title={<Title level={4} style={{ margin: 0 }}>{client.name ?? client.wa_id}</Title>}
-        extra={
-          <Button
-            icon={<EditOutlined />}
-            onClick={() => {
-              form.setFieldsValue(client)
-              setEditOpen(true)
-            }}
-          >
-            Edit
-          </Button>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
-          <Descriptions.Item label="WhatsApp">{client.wa_id}</Descriptions.Item>
-          <Descriptions.Item label="Email">{client.email ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="Client Type">
-            {client.client_type ? <Tag>{client.client_type}</Tag> : '—'}
-          </Descriptions.Item>
-          <Descriptions.Item label="Organization">{client.organization ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="Contact Person">{client.contact_person ?? '—'}</Descriptions.Item>
-          <Descriptions.Item label="Joined">
-            {dayjs(client.created_at).format('DD MMM YYYY')}
-          </Descriptions.Item>
-          {client.crm_notes && (
-            <Descriptions.Item label="CRM Notes" span={2}>{client.crm_notes}</Descriptions.Item>
-          )}
-        </Descriptions>
-      </Card>
-
-      <Card title="Order History">
+  const tabItems = [
+    {
+      key: 'orders',
+      label: `Orders (${orders.length})`,
+      children: (
         <Table
-          dataSource={orders ?? []}
+          dataSource={orders}
           columns={orderColumns}
           rowKey="id"
           size="small"
           pagination={false}
           locale={{ emptyText: 'No orders yet' }}
         />
+      ),
+    },
+    {
+      key: 'quotations',
+      label: `Quotations (${quotations.length})`,
+      children: (
+        <Table
+          dataSource={quotations}
+          columns={quotationColumns}
+          rowKey="id"
+          size="small"
+          pagination={false}
+          locale={{ emptyText: 'No quotations yet' }}
+        />
+      ),
+    },
+  ]
+
+  return (
+    <>
+      {ctx}
+      <Button type="link" onClick={() => navigate('/clients')} style={{ paddingLeft: 0, marginBottom: 12 }}>
+        ← Back to Clients
+      </Button>
+
+      <Card
+        title={
+          <Space>
+            <Text strong style={{ fontSize: 16 }}>{client.name ?? client.wa_id}</Text>
+            {client.customer_number && (
+              <Text type="secondary" style={{ fontSize: 12, fontFamily: 'monospace' }}>{client.customer_number}</Text>
+            )}
+            <Tag color={client.profile_complete ? 'green' : 'orange'}>
+              {client.profile_complete ? 'Complete' : 'Incomplete Profile'}
+            </Tag>
+          </Space>
+        }
+        extra={
+          <Button
+            icon={<EditOutlined />}
+            onClick={() => {
+              form.setFieldsValue({
+                name: client.name,
+                organisation: client.organisation,
+                school_name: client.school_name,
+                physical_address: client.physical_address,
+                client_type: client.client_type,
+              })
+              setEditOpen(true)
+            }}
+          >
+            Edit
+          </Button>
+        }
+        style={{ marginBottom: 16, borderRadius: 10 }}
+      >
+        <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+          <Descriptions.Item label="WhatsApp">{client.wa_id}</Descriptions.Item>
+          <Descriptions.Item label="Client Type">
+            {client.client_type ? <Tag>{client.client_type}</Tag> : '—'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Organisation">{client.organisation ?? '—'}</Descriptions.Item>
+          <Descriptions.Item label="School Name">{client.school_name ?? '—'}</Descriptions.Item>
+          <Descriptions.Item label="Physical Address" span={2}>{client.physical_address ?? '—'}</Descriptions.Item>
+          <Descriptions.Item label="Joined">{dayjs(client.created_at).format('DD MMM YYYY')}</Descriptions.Item>
+        </Descriptions>
+      </Card>
+
+      <Card style={{ borderRadius: 10 }} bodyStyle={{ padding: '0 16px 16px' }}>
+        <Tabs items={tabItems} />
       </Card>
 
       <Modal
         title="Edit Client"
         open={editOpen}
         onCancel={() => setEditOpen(false)}
-        footer={null}
+        onOk={() => updateMutation.mutate(form.getFieldsValue())}
+        okText="Save"
+        okButtonProps={{ loading: updateMutation.isPending }}
         width={480}
       >
-        <Form form={form} layout="vertical" onFinish={(v) => updateMutation.mutate(v)} style={{ marginTop: 16 }}>
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="Name">
             <Input />
-          </Form.Item>
-          <Form.Item name="email" label="Email">
-            <Input type="email" />
           </Form.Item>
           <Form.Item name="client_type" label="Client Type">
             <Select
               allowClear
-              options={CLIENT_TYPES.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
+              options={['retail','school','corporate','hospitality','church','security','government','reseller']
+                .map(t => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
             />
           </Form.Item>
-          <Form.Item name="organization" label="Organization">
+          <Form.Item name="organisation" label="Organisation">
             <Input />
           </Form.Item>
-          <Form.Item name="contact_person" label="Contact Person">
-            <Input />
+          <Form.Item name="school_name" label="School Name">
+            <Input placeholder="For school uniform clients" />
           </Form.Item>
-          <Form.Item name="crm_notes" label="CRM Notes">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-          <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-            <Button onClick={() => setEditOpen(false)} style={{ marginRight: 8 }}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={updateMutation.isPending}>Save Changes</Button>
+          <Form.Item name="physical_address" label="Physical Address">
+            <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </>
   )
 }

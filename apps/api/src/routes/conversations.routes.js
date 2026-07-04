@@ -15,3 +15,4 @@ conversationsRouter.patch('/:id/handback',        ctrl.handback);
 conversationsRouter.patch('/:id/close',           ctrl.close);
 conversationsRouter.patch('/:id/assign',          ctrl.assign);
 conversationsRouter.patch('/:id/read',            ctrl.markRead);
+conversationsRouter.post('/:id/claim',            ctrl.claim);

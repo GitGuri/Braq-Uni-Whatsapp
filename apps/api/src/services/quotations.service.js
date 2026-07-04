@@ -6,8 +6,8 @@ import { sendDocument, uploadMedia } from './whatsapp.service.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
 
-const VAT_RATE   = 15.00;
-const SLA_HOURS  = 4;
+const VAT_RATE  = 15.00;
+const SLA_HOURS = 4;
 
 function pdfToBuffer(doc) {
   return new Promise((resolve, reject) => {
@@ -19,18 +19,18 @@ function pdfToBuffer(doc) {
   });
 }
 
-// ── Sequential per-year quotation numbering — BRQ-QT-2026-0012 ───────────────
-async function nextQuotationNumber() {
-  const year = new Date().getFullYear();
-  return withTransaction(async (client) => {
-    const { rows } = await client.query(
-      `INSERT INTO sequence_counters (key, year, value)
+// ── Daily-resetting quotation reference — BRQ-Q-YYYYMMDD-XXXX ────────────────
+async function nextQuotationRef() {
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return withTransaction(async (tx) => {
+    const { rows } = await tx.query(
+      `INSERT INTO sequence_counters (key, date_key, value)
        VALUES ('quotation', $1, 1)
-       ON CONFLICT (key, year) DO UPDATE SET value = sequence_counters.value + 1
+       ON CONFLICT (key, date_key) DO UPDATE SET value = sequence_counters.value + 1
        RETURNING value`,
-      [year]
+      [today]
     );
-    return `BRQ-QT-${year}-${String(rows[0].value).padStart(4, '0')}`;
+    return `BRQ-Q-${today}-${String(rows[0].value).padStart(4, '0')}`;
   });
 }
 
@@ -101,23 +101,15 @@ export async function createFromFreeText(clientId, freeText) {
   const allItems  = [...lineItems, ...suggestedItems];
   const currency  = 'ZAR';
   const { subtotal, vatAmount, total } = calcTotals(allItems);
-
-  // Always draft — consultant reviews and approves before PDF is sent to client.
-  const status      = 'draft';
   const slaRemindAt = new Date(Date.now() + SLA_HOURS * 60 * 60 * 1000);
-
-  const reference  = await nextQuotationNumber();
-  const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  const sentAt     = status === 'sent' ? new Date() : null;
+  const reference   = await nextQuotationRef();
 
   const { rows } = await query(
     `INSERT INTO quotations
-       (reference, client_id, status, line_items, subtotal, vat_rate, vat_amount,
-        total, currency, valid_until, sla_remind_at, sent_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       (reference, client_id, status, line_items, subtotal, vat, total, currency, sla_remind_at)
+     VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8)
      RETURNING *`,
-    [reference, clientId, status, JSON.stringify(allItems),
-     subtotal, VAT_RATE, vatAmount, total, currency, validUntil, slaRemindAt, sentAt]
+    [reference, clientId, JSON.stringify(allItems), subtotal, vatAmount, total, currency, slaRemindAt]
   );
 
   return { quotation: rows[0], unmatchedText: unmatchedDescriptions };
@@ -138,23 +130,20 @@ export async function approveQuotation(id, lineItems, staffId) {
   }));
 
   const { subtotal, vatAmount, total } = calcTotals(confirmedItems);
-  const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   const { rows } = await query(
     `UPDATE quotations
-     SET status       = 'sent',
-         line_items   = $1,
-         subtotal     = $2,
-         vat_amount   = $3,
-         total        = $4,
-         valid_until  = $5,
-         approved_by  = $6,
-         approved_at  = NOW(),
-         sent_at      = NOW(),
-         updated_at   = NOW()
-     WHERE id = $7
+     SET status      = 'sent',
+         line_items  = $1,
+         subtotal    = $2,
+         vat         = $3,
+         total       = $4,
+         approved_by = $5,
+         approved_at = NOW(),
+         updated_at  = NOW()
+     WHERE id = $6
      RETURNING *`,
-    [JSON.stringify(confirmedItems), subtotal, vatAmount, total, validUntil, staffId, id]
+    [JSON.stringify(confirmedItems), subtotal, vatAmount, total, staffId, id]
   );
   const quotation = rows[0];
 
@@ -177,7 +166,7 @@ export async function approveQuotation(id, lineItems, staffId) {
           `✅ Your quotation is ready! 📄\n\n` +
           `*Ref: ${quotation.reference}*\n` +
           `*Total: R ${Number(total).toFixed(2)} (incl. VAT)*\n\n` +
-          `Valid for 30 days. Reply *po* to submit a purchase order or *9* to speak to a consultant.`,
+          `Valid for 7 days. Reply *9* to speak to a consultant.`,
       });
     } catch (err) {
       logger.error('Failed to send approved quotation PDF via WhatsApp', {
@@ -198,10 +187,14 @@ export async function listQuotations({ status } = {}) {
     `SELECT q.*,
             c.name            AS client_name,
             c.whatsapp_number AS client_wa,
-            s.name            AS approved_by_name
+            c.organisation    AS client_org,
+            s.name            AS approved_by_name,
+            o.id              AS order_id,
+            o.reference       AS order_reference
      FROM quotations q
      LEFT JOIN clients c ON q.client_id  = c.id
      LEFT JOIN staff   s ON q.approved_by = s.id
+     LEFT JOIN orders  o ON o.quotation_id = q.id
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY q.created_at DESC`,
     params
@@ -211,6 +204,17 @@ export async function listQuotations({ status } = {}) {
 
 export async function getQuotationById(id) {
   const { rows } = await query('SELECT * FROM quotations WHERE id = $1', [id]);
+  if (!rows.length) throw new HttpError(404, 'Quotation not found');
+  return rows[0];
+}
+
+export async function updateQuotationStatus(id, status) {
+  const ALLOWED = ['draft', 'sent', 'accepted', 'rejected'];
+  if (!ALLOWED.includes(status)) throw new HttpError(400, `Invalid status: ${status}`);
+  const { rows } = await query(
+    `UPDATE quotations SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+    [status, id]
+  );
   if (!rows.length) throw new HttpError(404, 'Quotation not found');
   return rows[0];
 }
@@ -244,8 +248,8 @@ export function renderQuotationPdf(quotation, clientInfo = {}) {
   doc.font('Helvetica').fontSize(9).fillColor('#8fb8d8')
      .text('Your Uniform Stylist', L, 48);
   doc.font('Helvetica').fontSize(8).fillColor('#8fb8d8')
-     .text('Corner Leeuwkop Rd & Rivonia Blvd, Sunninghill, Sandton', L, 62)
-     .text('Tel: 011 234 5678  |  info@braquni.com  |  www.braquni.co.za', L, 74);
+     .text('754B Voortrekker Road, Dalview, Brakpan, Gauteng, South Africa', L, 62)
+     .text('info@braquni.com  |  www.braquni.co.za', L, 74);
 
   // Quotation title (right side of header)
   doc.font('Helvetica-Bold').fontSize(20).fillColor('#ffffff')
@@ -354,8 +358,8 @@ export function renderQuotationPdf(quotation, clientInfo = {}) {
      .text('Subtotal:',    tX, y, { width: 100 })
      .text(`R ${Number(quotation.subtotal).toFixed(2)}`, tValX, y, { width: 90, align: 'right' });
   y += 14;
-  doc.text(`VAT (${quotation.vat_rate ?? 15}%):`, tX, y, { width: 100 })
-     .text(`R ${Number(quotation.vat_amount).toFixed(2)}`, tValX, y, { width: 90, align: 'right' });
+  doc.text(`VAT (15%):`, tX, y, { width: 100 })
+     .text(`R ${Number(quotation.vat).toFixed(2)}`, tValX, y, { width: 90, align: 'right' });
   y += 8;
   doc.moveTo(tX, y).lineTo(R, y).lineWidth(0.5).strokeColor(DIVIDER).stroke();
   y += 8;
