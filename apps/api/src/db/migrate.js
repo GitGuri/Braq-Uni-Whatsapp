@@ -389,7 +389,11 @@ const migrations = [
 `CREATE INDEX IF NOT EXISTS idx_orders_needs_review      ON orders(needs_review)     WHERE needs_review = true`,
 `CREATE INDEX IF NOT EXISTS idx_quotations_needs_review  ON quotations(needs_review) WHERE needs_review = true`,
 
-// ── 025: size availability bot state ─────────────────────────────────────────
+// ── 025: ensure all retail + pricing bot states exist in enum ────────────────
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_pricing'`,
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_layby'`,
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_hours'`,
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_collection'`,
 `ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_size_availability'`,
 
 // ── 024: remap product categories to 6-category catalog ──────────────────────

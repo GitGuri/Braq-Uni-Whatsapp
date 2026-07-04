@@ -661,9 +661,19 @@ async function handleMainMenuSelection(option, phone, convo, client, R, updateSt
 async function handleRetailMenuSelection(option, phone, convo, client, R, updateState) {
   switch (option) {
     case 1: {
-      const products = await listProducts({});
-      await updateState(convo.id, 'retail_pricing');
-      return R(TEMPLATES.RETAIL_PRODUCT_LIST, { products });
+      try {
+        const products = await listProducts({});
+        await updateState(convo.id, 'retail_pricing');
+        return R(TEMPLATES.RETAIL_PRODUCT_LIST, { products });
+      } catch (err) {
+        logger.error('Product pricing list failed', { error: err.message });
+        return R(() =>
+          `🛍️ *Braq Uni — Product Pricing*\n\n` +
+          `Our product catalog is loading. Please reply *9* to speak to a consultant for pricing, ` +
+          `or try again in a moment.\n\n` +
+          `Reply *0* for the main menu.`
+        );
+      }
     }
     case 2: {
       // Always use the hardcoded canonical list; supplement with any extra DB schools
