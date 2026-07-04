@@ -26,7 +26,7 @@ export async function createProduct({ category, name, sizes, price, currency, cl
   const { rows } = await query(
     `INSERT INTO products (category, name, sizes, price, currency, client_type)
      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [category, name, JSON.stringify(sizes || []), price, currency || 'USD', clientType || null]
+    [category, name, JSON.stringify(sizes || []), price, currency || 'ZAR', clientType || null]
   );
   return rows[0];
 }

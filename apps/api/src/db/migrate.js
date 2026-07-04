@@ -389,6 +389,11 @@ const migrations = [
 `CREATE INDEX IF NOT EXISTS idx_orders_needs_review      ON orders(needs_review)     WHERE needs_review = true`,
 `CREATE INDEX IF NOT EXISTS idx_quotations_needs_review  ON quotations(needs_review) WHERE needs_review = true`,
 
+// ── 024: remap product categories to 6-category catalog ──────────────────────
+`UPDATE products SET category = 'school_wear'   WHERE category IN ('uniform')`,
+`UPDATE products SET category = 'corporate_wear' WHERE category IN ('corporate', 'hospitality', 'accessories', 'other')`,
+`UPDATE products SET category = 'outdoor_wear'   WHERE category IN ('sports')`,
+
 // ── 018: updated_at auto-trigger ─────────────────────────────────────────────
 `CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$

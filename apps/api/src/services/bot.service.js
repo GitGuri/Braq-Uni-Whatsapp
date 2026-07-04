@@ -615,8 +615,8 @@ async function handleMainMenuSelection(option, phone, convo, client, R, updateSt
 async function handleRetailMenuSelection(option, phone, convo, client, R, updateState) {
   switch (option) {
     case 1: {
-      const products = await listProducts({ clientType: 'retail' });
-      await updateState(convo.id, 'retail_menu');
+      const products = await listProducts({});
+      await updateState(convo.id, 'retail_pricing');
       return R(TEMPLATES.RETAIL_PRODUCT_LIST, { products });
     }
     case 2: {

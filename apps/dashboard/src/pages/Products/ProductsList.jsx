@@ -1,49 +1,90 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Table, Card, Typography, Button, Tag, Modal, Form, Input, InputNumber, Select, message, Space,
+  Row, Col, Card, Typography, Button, Tag, Modal, Form, Input, InputNumber,
+  Checkbox, message, Drawer, Table,
 } from 'antd'
-import { PlusOutlined, EditOutlined } from '@ant-design/icons'
+import {
+  PlusOutlined, EditOutlined, ReadOutlined, MedicineBoxOutlined,
+  CompassOutlined, BankOutlined, ToolOutlined, SkinOutlined,
+} from '@ant-design/icons'
 import { listProducts, createProduct, updateProduct } from '../../api/products.js'
 
 const { Title, Text } = Typography
 
-const CATEGORIES = ['uniform', 'corporate', 'hospitality', 'sports', 'accessories', 'other']
-const CLIENT_TYPES = ['retail', 'school', 'corporate', 'hospitality', 'church', 'security', 'government', 'reseller']
+const SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL']
 
-function sizesArrayToString(sizes) {
-  if (!sizes) return ''
-  if (Array.isArray(sizes)) return sizes.join(', ')
-  return sizes
-}
-
-function sizesStringToArray(str) {
-  if (!str?.trim()) return []
-  return str.split(',').map((s) => s.trim()).filter(Boolean)
-}
+const CATEGORIES = [
+  {
+    key:   'school_wear',
+    label: 'School Wear',
+    icon:  <ReadOutlined style={{ fontSize: 26 }} />,
+    color: '#1677ff',
+    desc:  'Ties, socks, jerseys, skirts, shorts, trousers, blazers, windbreakers, shirts',
+  },
+  {
+    key:   'knitwear',
+    label: 'Knitwear',
+    icon:  <SkinOutlined style={{ fontSize: 26 }} />,
+    color: '#722ed1',
+    desc:  'Knitted garments and knitwear products',
+  },
+  {
+    key:   'medical_wear',
+    label: 'Medical Wear',
+    icon:  <MedicineBoxOutlined style={{ fontSize: 26 }} />,
+    color: '#eb2f96',
+    desc:  'Scrubs, doctors coats, surgical gowns, patient gowns',
+  },
+  {
+    key:   'outdoor_wear',
+    label: 'Outdoor Wear',
+    icon:  <CompassOutlined style={{ fontSize: 26 }} />,
+    color: '#52c41a',
+    desc:  'Outdoor and activewear garments',
+  },
+  {
+    key:   'corporate_wear',
+    label: 'Corporate Wear',
+    icon:  <BankOutlined style={{ fontSize: 26 }} />,
+    color: '#d46b08',
+    desc:  'Shirts, blazers, pencil skirts, chino pants, trousers, ties, polo shirts',
+  },
+  {
+    key:   'safety_wear',
+    label: 'Safety Wear',
+    icon:  <ToolOutlined style={{ fontSize: 26 }} />,
+    color: '#cf1322',
+    desc:  'Denim worksuits, polyester worksuits, safety aprons, heavy duty work pants',
+  },
+]
 
 export default function ProductsList() {
   const qc = useQueryClient()
+  const [activeCategory, setActiveCategory] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
 
   const { data, isLoading } = useQuery({
     queryKey: ['products'],
-    queryFn: () => listProducts({ limit: 100 }),
+    queryFn: () => listProducts({}),
   })
 
-  const products = data?.products ?? []
+  const allProducts = data?.products ?? []
+  const categoryConfig = CATEGORIES.find((c) => c.key === activeCategory)
+  const categoryProducts = activeCategory
+    ? allProducts.filter((p) => p.category === activeCategory)
+    : []
 
   const saveMutation = useMutation({
     mutationFn: (values) => {
       const payload = {
-        name:       values.name,
-        category:   values.category,
-        price:      values.price,
-        currency:   values.currency || 'ZAR',
-        clientType: values.clientType || null,
-        sizes:      sizesStringToArray(values.sizes),
+        name:     values.name,
+        category: values.category,
+        price:    values.price,
+        currency: 'ZAR',
+        sizes:    values.sizes || [],
       }
       return editing ? updateProduct(editing.id, payload) : createProduct(payload)
     },
@@ -57,23 +98,21 @@ export default function ProductsList() {
     onError: (err) => message.error(err.response?.data?.error ?? 'Failed to save product'),
   })
 
-  const openEdit = (product) => {
-    setEditing(product)
-    form.setFieldsValue({
-      name:       product.name,
-      category:   product.category,
-      price:      Number(product.price),
-      currency:   product.currency || 'ZAR',
-      clientType: product.client_type,
-      sizes:      sizesArrayToString(product.sizes),
-    })
-    setModalOpen(true)
-  }
-
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ currency: 'ZAR' })
+    form.setFieldsValue({ category: activeCategory })
+    setModalOpen(true)
+  }
+
+  const openEdit = (product) => {
+    setEditing(product)
+    form.setFieldsValue({
+      name:     product.name,
+      category: product.category,
+      price:    Number(product.price),
+      sizes:    Array.isArray(product.sizes) ? product.sizes : [],
+    })
     setModalOpen(true)
   }
 
@@ -81,43 +120,29 @@ export default function ProductsList() {
     {
       title: 'Name',
       dataIndex: 'name',
-      key: 'name',
       render: (v) => <Text strong>{v}</Text>,
-    },
-    {
-      title: 'Category',
-      dataIndex: 'category',
-      key: 'category',
-      render: (v) => <Tag>{v}</Tag>,
-    },
-    {
-      title: 'Client Type',
-      dataIndex: 'client_type',
-      key: 'client_type',
-      render: (v) => v ? <Tag color="blue">{v}</Tag> : <Text type="secondary">All</Text>,
     },
     {
       title: 'Sizes',
       dataIndex: 'sizes',
-      key: 'sizes',
       render: (v) => {
         const arr = Array.isArray(v) ? v : []
         return arr.length
-          ? arr.map((s) => <Tag key={s} style={{ marginBottom: 2 }}>{s}</Tag>)
+          ? arr.map((s) => <Tag key={s}>{s}</Tag>)
           : <Text type="secondary">—</Text>
       },
     },
     {
       title: 'Unit Price',
       dataIndex: 'price',
-      key: 'price',
-      render: (v, row) => v != null
+      render: (v) => v != null
         ? <Text strong>R {Number(v).toFixed(2)}</Text>
         : <Text type="secondary">—</Text>,
     },
     {
       title: '',
       key: 'actions',
+      width: 80,
       render: (_, row) => (
         <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
           Edit
@@ -128,62 +153,120 @@ export default function ProductsList() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>Product Catalog</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Add Product
-        </Button>
-      </div>
+      <Title level={4} style={{ marginBottom: 20 }}>Product Catalog</Title>
 
-      <Card>
+      <Row gutter={[16, 16]}>
+        {CATEGORIES.map((cat) => {
+          const count = allProducts.filter((p) => p.category === cat.key).length
+          return (
+            <Col xs={24} sm={12} lg={8} key={cat.key}>
+              <Card
+                hoverable
+                onClick={() => setActiveCategory(cat.key)}
+                style={{ borderRadius: 10, borderTop: `3px solid ${cat.color}`, cursor: 'pointer' }}
+                bodyStyle={{ padding: '20px 24px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{
+                    width: 56, height: 56, borderRadius: 12, flexShrink: 0,
+                    background: `${cat.color}18`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: cat.color,
+                  }}>
+                    {cat.icon}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{cat.label}</div>
+                    <div style={{ fontSize: 11, color: '#888', marginTop: 2, lineHeight: 1.4 }}>
+                      {cat.desc}
+                    </div>
+                    <Tag color={cat.color} style={{ marginTop: 8, fontSize: 11 }}>
+                      {count} product{count !== 1 ? 's' : ''}
+                    </Tag>
+                  </div>
+                </div>
+              </Card>
+            </Col>
+          )
+        })}
+      </Row>
+
+      {/* Category drawer */}
+      <Drawer
+        title={
+          categoryConfig && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ color: categoryConfig.color }}>{categoryConfig.icon}</span>
+              <span>{categoryConfig.label}</span>
+            </div>
+          )
+        }
+        open={!!activeCategory}
+        onClose={() => setActiveCategory(null)}
+        width={700}
+        extra={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            Add Product
+          </Button>
+        }
+      >
         <Table
-          dataSource={products}
+          dataSource={categoryProducts}
           columns={columns}
           rowKey="id"
           loading={isLoading}
           size="middle"
           pagination={{ pageSize: 20 }}
+          locale={{ emptyText: 'No products yet — click Add Product to get started.' }}
         />
-      </Card>
+      </Drawer>
 
+      {/* Add / Edit modal */}
       <Modal
-        title={editing ? 'Edit Product' : 'Add Product'}
+        title={
+          editing
+            ? `Edit — ${editing.name}`
+            : `New Product — ${categoryConfig?.label ?? ''}`
+        }
         open={modalOpen}
         onCancel={() => { setModalOpen(false); setEditing(null); form.resetFields() }}
         footer={null}
         width={480}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" onFinish={(v) => saveMutation.mutate(v)} style={{ marginTop: 16 }}>
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={(v) => saveMutation.mutate(v)}
+          style={{ marginTop: 16 }}
+        >
+          <Form.Item name="category" hidden><Input /></Form.Item>
+
           <Form.Item name="name" label="Product Name" rules={[{ required: true, message: 'Required' }]}>
-            <Input />
+            <Input placeholder="e.g. Polo Shirt" />
           </Form.Item>
-          <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Required' }]}>
-            <Select options={CATEGORIES.map((c) => ({ value: c, label: c.charAt(0).toUpperCase() + c.slice(1) }))} />
+
+          <Form.Item name="price" label="Unit Price (ZAR)" rules={[{ required: true, message: 'Required' }]}>
+            <InputNumber min={0} precision={2} prefix="R" style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="clientType" label="Client Type (optional — leave blank for all)">
-            <Select
-              allowClear
-              options={CLIENT_TYPES.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
-            />
+
+          <Form.Item name="sizes" label="Available Sizes">
+            <Checkbox.Group>
+              <Row gutter={[8, 8]}>
+                {SIZES.map((s) => (
+                  <Col key={s}>
+                    <Checkbox value={s}>{s}</Checkbox>
+                  </Col>
+                ))}
+              </Row>
+            </Checkbox.Group>
           </Form.Item>
-          <Space style={{ width: '100%' }}>
-            <Form.Item name="price" label="Unit Price" rules={[{ required: true, message: 'Required' }]} style={{ flex: 1 }}>
-              <InputNumber min={0} precision={2} prefix="R" style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="currency" label="Currency" initialValue="ZAR" style={{ width: 90 }}>
-              <Select options={[{ value: 'ZAR', label: 'ZAR' }, { value: 'USD', label: 'USD' }]} />
-            </Form.Item>
-          </Space>
-          <Form.Item
-            name="sizes"
-            label="Available Sizes"
-            extra="Comma-separated, e.g. XS, S, M, L, XL, XXL"
-          >
-            <Input placeholder="XS, S, M, L, XL, XXL" />
-          </Form.Item>
+
           <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
-            <Button onClick={() => { setModalOpen(false); setEditing(null) }} style={{ marginRight: 8 }}>
+            <Button
+              onClick={() => { setModalOpen(false); setEditing(null) }}
+              style={{ marginRight: 8 }}
+            >
               Cancel
             </Button>
             <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>

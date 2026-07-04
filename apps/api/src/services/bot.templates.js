@@ -38,16 +38,30 @@ export const TEMPLATES = {
     if (!products || !products.length) {
       return `Our product catalog is currently being updated. Please speak to a consultant for pricing.\n\nReply *0* to return to the main menu.`;
     }
+
+    const CATEGORY_ORDER = [
+      'school_wear', 'knitwear', 'medical_wear',
+      'outdoor_wear', 'corporate_wear', 'safety_wear',
+    ];
+    const formatCat = (key) =>
+      key.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+
     const byCategory = {};
     for (const p of products) {
-      const cat = p.category.charAt(0).toUpperCase() + p.category.slice(1);
-      if (!byCategory[cat]) byCategory[cat] = [];
-      byCategory[cat].push(p);
+      const key = p.category;
+      if (!byCategory[key]) byCategory[key] = [];
+      byCategory[key].push(p);
     }
+
+    const orderedKeys = [
+      ...CATEGORY_ORDER.filter((k) => byCategory[k]),
+      ...Object.keys(byCategory).filter((k) => !CATEGORY_ORDER.includes(k)),
+    ];
+
     let msg = `🛍️ *Braq Uni — Product Pricing*\n\n`;
-    for (const [cat, items] of Object.entries(byCategory)) {
-      msg += `*${cat}*\n`;
-      for (const item of items) {
+    for (const key of orderedKeys) {
+      msg += `*${formatCat(key)}*\n`;
+      for (const item of byCategory[key]) {
         msg += `• ${item.name} — R ${Number(item.price).toFixed(2)}\n`;
         if (Array.isArray(item.sizes) && item.sizes.length) {
           msg += `  Sizes: ${item.sizes.join(', ')}\n`;
