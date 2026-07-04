@@ -12,6 +12,22 @@ import { getOrCreateClientByWhatsapp, updateClientProfile } from './clients.serv
 import { isWithinBusinessHours } from '../utils/businessHours.js';
 import { logger } from '../utils/logger.js';
 
+// Canonical school list — always shown in the bot even before catalog is populated
+const SCHOOLS = [
+  'Laerskool Dalview',
+  'Hoerskool Stoffberg',
+  'Laerskool Brakpan Oos',
+  'Tsakane Secondary',
+  'Dalpark Primary',
+  'Dalpark Secondary',
+  'Anzac Primary',
+  'Sonneveld Akademie',
+  'Exed Privaat Skool',
+  'Laerskool Die Arend',
+  'Brakpan Educational Centre',
+  'Brakpan Educational Primary',
+];
+
 // Where to resume after the registration gate completes.
 const RESUME_TEMPLATES = {
   quotation_requested:       TEMPLATES.QUOTATION_ASK_DESCRIPTION,
@@ -23,6 +39,7 @@ const PARENT_STATE = {
   main_menu:                      'main_menu',
   retail_menu:                    'main_menu',
   retail_pricing:                 'retail_menu',
+  retail_size_availability:       'retail_menu',
   retail_layby:                   'retail_menu',
   retail_hours:                   'retail_menu',
   retail_collection:              'retail_menu',
@@ -311,7 +328,7 @@ async function handleDesignApprovalReply(body, convo, R, updateState) {
 
 // ── Try the AI FAQ agent, escalate to a consultant if it can't ground an answer
 async function tryAnswerFaq(question, convo, R, updateState) {
-  const products = await listProducts({ clientType: 'retail' });
+  const products = await listProducts({});
   const result = await answerFaq(question, {
     products,
     hoursText: TEMPLATES.RETAIL_HOURS(),
@@ -325,6 +342,30 @@ async function tryAnswerFaq(question, convo, R, updateState) {
   logger.info('FAQ escalated to consultant', { conversationId: convo.id, reason: result.reason });
   await updateState(convo.id, 'awaiting_consultant');
   return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
+}
+
+// ── Handle a size availability query from the customer ────────────────────────
+async function handleSizeQuery(body, convo, R) {
+  const products = await listProducts({});
+  const result = await answerFaq(body, {
+    products,
+    hoursText: TEMPLATES.RETAIL_HOURS(),
+    laybyText: TEMPLATES.RETAIL_LAYBY(),
+  });
+
+  if (result.type === 'answer' && result.text) {
+    return R(() =>
+      result.text +
+      '\n\nFeel free to ask about another product, or reply *back* for the shop menu | *0* for the main menu.'
+    );
+  }
+
+  return R(() =>
+    `I couldn't find size information for that product in our catalog. 😊\n\n` +
+    `Please reply *9* to speak to a consultant who can confirm availability, ` +
+    `or try asking about a different product.\n\n` +
+    `Reply *back* for the shop menu | *0* for the main menu.`
+  );
 }
 
 // ── Look up order by reference ────────────────────────────────────────────────
@@ -473,8 +514,10 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
       if (!isNaN(num) && num >= 1 && num <= schools.length) {
         const selectedSchool = schools[num - 1];
         const uniforms = await listUniformsForSchool(selectedSchool);
-        await updateState(convo.id, 'main_menu');
-        if (!uniforms.length) return R(TEMPLATES.RETAIL_SCHOOL_NOT_FOUND);
+        await updateState(convo.id, 'retail_menu');
+        if (!uniforms.length) {
+          return R(TEMPLATES.RETAIL_SCHOOL_PENDING, { schoolName: selectedSchool });
+        }
         return R(TEMPLATES.RETAIL_SCHOOL_UNIFORMS, { schoolName: selectedSchool, uniforms });
       }
       return R(TEMPLATES.RETAIL_SCHOOL_SELECT, { schools });
@@ -483,6 +526,9 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     case 'retail_pricing':
     case 'retail_layby':
       return tryAnswerFaq(body, convo, R, updateState);
+
+    case 'retail_size_availability':
+      return handleSizeQuery(body, convo, R);
 
     case 'retail_collection':
       // Expecting an order reference
@@ -620,11 +666,10 @@ async function handleRetailMenuSelection(option, phone, convo, client, R, update
       return R(TEMPLATES.RETAIL_PRODUCT_LIST, { products });
     }
     case 2: {
-      const schools = await listDistinctSchools();
-      if (!schools.length) {
-        await updateState(convo.id, 'awaiting_consultant');
-        return R(TEMPLATES.CONSULTANT_ASSIGNED, { consultantName: 'a consultant' });
-      }
+      // Always use the hardcoded canonical list; supplement with any extra DB schools
+      const dbSchools = await listDistinctSchools();
+      const extra = dbSchools.filter((s) => !SCHOOLS.includes(s));
+      const schools = [...SCHOOLS, ...extra];
       await updateState(convo.id, 'retail_school_select', { schoolList: schools });
       return R(TEMPLATES.RETAIL_SCHOOL_SELECT, { schools });
     }
@@ -636,6 +681,9 @@ async function handleRetailMenuSelection(option, phone, convo, client, R, update
     case 5:
       await updateState(convo.id, 'retail_layby');
       return R(TEMPLATES.RETAIL_LAYBY);
+    case 6:
+      await updateState(convo.id, 'retail_size_availability');
+      return R(TEMPLATES.RETAIL_SIZE_ASK);
     default:
       return R(TEMPLATES.UNKNOWN_INTENT);
   }

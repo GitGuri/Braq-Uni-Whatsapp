@@ -31,7 +31,8 @@ export const TEMPLATES = {
     `2️⃣  School uniform information\n` +
     `3️⃣  Store trading hours\n` +
     `4️⃣  Collection status\n` +
-    `5️⃣  Lay-by information\n\n` +
+    `5️⃣  Lay-by information\n` +
+    `6️⃣  Size availability\n\n` +
     `Reply *back* or *0* for the main menu | *9* to speak to a consultant.`,
 
   RETAIL_PRODUCT_LIST: ({ products }) => {
@@ -40,7 +41,7 @@ export const TEMPLATES = {
     }
 
     const CATEGORY_ORDER = [
-      'school_wear', 'knitwear', 'medical_wear',
+      'knitwear', 'medical_wear',
       'outdoor_wear', 'corporate_wear', 'safety_wear',
     ];
     const formatCat = (key) =>
@@ -55,7 +56,7 @@ export const TEMPLATES = {
 
     const orderedKeys = [
       ...CATEGORY_ORDER.filter((k) => byCategory[k]),
-      ...Object.keys(byCategory).filter((k) => !CATEGORY_ORDER.includes(k)),
+      ...Object.keys(byCategory).filter((k) => !CATEGORY_ORDER.includes(k) && k !== 'school_wear'),
     ];
 
     let msg = `🛍️ *Braq Uni — Product Pricing*\n\n`;
@@ -96,6 +97,17 @@ export const TEMPLATES = {
 
   RETAIL_SCHOOL_NOT_FOUND: () =>
     `Sorry, we don't have a record of that school in our catalog.\n\nReply *7* to speak to a consultant who can assist you, or *0* to return to the main menu.`,
+
+  RETAIL_SCHOOL_PENDING: ({ schoolName }) =>
+    `🏫 *${schoolName}*\n\n` +
+    `We supply uniforms for ${schoolName}. Our consultant will send you the full product list and pricing for this school.\n\n` +
+    `Reply *9* to be connected to a consultant now, or *back* to view another school.`,
+
+  RETAIL_SIZE_ASK: () =>
+    `👕 *Size Availability*\n\n` +
+    `Ask me about size availability for any of our products — just type your question.\n\n` +
+    `_Example: "Do you have polo shirts in size XL?" or "What sizes are available for the scrub top?"_\n\n` +
+    `Reply *back* for the shop menu | *0* for the main menu.`,
 
   RETAIL_HOURS: () =>
     `🕐 *Braq Uni — Trading Hours*\n\n` +

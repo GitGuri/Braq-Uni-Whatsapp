@@ -389,6 +389,9 @@ const migrations = [
 `CREATE INDEX IF NOT EXISTS idx_orders_needs_review      ON orders(needs_review)     WHERE needs_review = true`,
 `CREATE INDEX IF NOT EXISTS idx_quotations_needs_review  ON quotations(needs_review) WHERE needs_review = true`,
 
+// ── 025: size availability bot state ─────────────────────────────────────────
+`ALTER TYPE session_state ADD VALUE IF NOT EXISTS 'retail_size_availability'`,
+
 // ── 024: remap product categories to 6-category catalog ──────────────────────
 `UPDATE products SET category = 'school_wear'   WHERE category IN ('uniform')`,
 `UPDATE products SET category = 'corporate_wear' WHERE category IN ('corporate', 'hospitality', 'accessories', 'other')`,
