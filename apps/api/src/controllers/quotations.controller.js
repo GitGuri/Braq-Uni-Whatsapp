@@ -31,7 +31,7 @@ function handleError(res, err, fallbackMessage) {
 
 export async function list(req, res) {
   try {
-    const quotations = await quotationsService.listQuotations();
+    const quotations = await quotationsService.listQuotations({ status: req.query.status });
     res.json({ quotations });
   } catch (err) {
     handleError(res, err, 'Failed to fetch quotations');

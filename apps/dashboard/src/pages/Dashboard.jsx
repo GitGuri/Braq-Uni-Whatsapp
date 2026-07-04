@@ -3,12 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { Row, Col, Card, Statistic, Table, Tag, Typography, Spin, Badge } from 'antd'
 import {
   ShoppingCartOutlined, AlertOutlined, CustomerServiceOutlined,
-  MessageOutlined, ClockCircleOutlined,
+  MessageOutlined, ClockCircleOutlined, FileTextOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime.js'
 import { listOrders } from '../api/orders.js'
 import { listTickets } from '../api/tickets.js'
+import { listQuotations } from '../api/quotations.js'
 import { getUnreadCount } from '../api/conversations.js'
 import StageTag from '../components/StageTag.jsx'
 import { useAuth } from '../auth/AuthContext.jsx'
@@ -47,11 +48,18 @@ export default function Dashboard() {
     queryFn: () => listOrders({ active: 'true', limit: 500 }),
   })
 
+  const { data: draftQuotationsData } = useQuery({
+    queryKey: ['quotations', 'draft'],
+    queryFn: () => listQuotations({ status: 'draft' }),
+    refetchInterval: 30_000,
+  })
+
   const recentOrders    = ordersData?.orders ?? []
   const delayedCount    = delayedData?.orders?.length ?? 0
   const openTickets     = ticketsData?.tickets?.length ?? 0
   const waitingInbox    = unreadData?.waiting ?? 0
   const activeOrders    = activeOrdersData?.orders?.length ?? 0
+  const draftQuotations = draftQuotationsData?.quotations?.length ?? 0
 
   const hour = dayjs().hour()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
@@ -63,7 +71,13 @@ export default function Dashboard() {
       icon: <ShoppingCartOutlined />,
       color: '#1677ff',
       path: '/orders',
-      suffix: null,
+    },
+    {
+      title: 'Quotations to Approve',
+      value: draftQuotations,
+      icon: <FileTextOutlined />,
+      color: draftQuotations > 0 ? '#d46b08' : '#3f8600',
+      path: '/quotations',
     },
     {
       title: 'Inbox — Waiting',
@@ -79,7 +93,6 @@ export default function Dashboard() {
       icon: <CustomerServiceOutlined />,
       color: openTickets > 0 ? '#cf1322' : '#3f8600',
       path: '/tickets',
-      suffix: null,
     },
     {
       title: 'Delayed Orders',
@@ -87,7 +100,6 @@ export default function Dashboard() {
       icon: <AlertOutlined />,
       color: delayedCount > 0 ? '#cf1322' : '#3f8600',
       path: '/orders',
-      suffix: null,
     },
   ]
 

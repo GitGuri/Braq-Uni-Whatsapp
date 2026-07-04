@@ -16,6 +16,7 @@ import Broadcasts from './pages/Broadcasts.jsx'
 import InboxList from './pages/Inbox/InboxList.jsx'
 import ConversationChat from './pages/Inbox/ConversationChat.jsx'
 import SchoolCatalogPage from './pages/SchoolCatalog/SchoolCatalogPage.jsx'
+import StaffList from './pages/Staff/StaffList.jsx'
 
 export default function App() {
   return (
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/inbox" element={<InboxList />} />
           <Route path="/inbox/:id" element={<ConversationChat />} />
           <Route path="/school-catalog" element={<SchoolCatalogPage />} />
+          <Route path="/staff" element={<StaffList />} />
         </Route>
       </Route>
 

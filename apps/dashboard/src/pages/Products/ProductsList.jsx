@@ -1,15 +1,26 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Table, Card, Typography, Button, Tag, Modal, Form, Input, InputNumber, Select, message,
+  Table, Card, Typography, Button, Tag, Modal, Form, Input, InputNumber, Select, message, Space,
 } from 'antd'
 import { PlusOutlined, EditOutlined } from '@ant-design/icons'
 import { listProducts, createProduct, updateProduct } from '../../api/products.js'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const CATEGORIES = ['uniform', 'corporate', 'hospitality', 'sports', 'accessories', 'other']
 const CLIENT_TYPES = ['retail', 'school', 'corporate', 'hospitality', 'church', 'security', 'government', 'reseller']
+
+function sizesArrayToString(sizes) {
+  if (!sizes) return ''
+  if (Array.isArray(sizes)) return sizes.join(', ')
+  return sizes
+}
+
+function sizesStringToArray(str) {
+  if (!str?.trim()) return []
+  return str.split(',').map((s) => s.trim()).filter(Boolean)
+}
 
 export default function ProductsList() {
   const qc = useQueryClient()
@@ -25,8 +36,17 @@ export default function ProductsList() {
   const products = data?.products ?? []
 
   const saveMutation = useMutation({
-    mutationFn: (values) =>
-      editing ? updateProduct(editing.id, values) : createProduct(values),
+    mutationFn: (values) => {
+      const payload = {
+        name:       values.name,
+        category:   values.category,
+        price:      values.price,
+        currency:   values.currency || 'ZAR',
+        clientType: values.clientType || null,
+        sizes:      sizesStringToArray(values.sizes),
+      }
+      return editing ? updateProduct(editing.id, payload) : createProduct(payload)
+    },
     onSuccess: () => {
       message.success(editing ? 'Product updated' : 'Product created')
       setModalOpen(false)
@@ -39,18 +59,31 @@ export default function ProductsList() {
 
   const openEdit = (product) => {
     setEditing(product)
-    form.setFieldsValue(product)
+    form.setFieldsValue({
+      name:       product.name,
+      category:   product.category,
+      price:      Number(product.price),
+      currency:   product.currency || 'ZAR',
+      clientType: product.client_type,
+      sizes:      sizesArrayToString(product.sizes),
+    })
     setModalOpen(true)
   }
 
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
+    form.setFieldsValue({ currency: 'ZAR' })
     setModalOpen(true)
   }
 
   const columns = [
-    { title: 'Name', dataIndex: 'name', key: 'name', render: (v) => <strong>{v}</strong> },
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      key: 'name',
+      render: (v) => <Text strong>{v}</Text>,
+    },
     {
       title: 'Category',
       dataIndex: 'category',
@@ -61,19 +94,26 @@ export default function ProductsList() {
       title: 'Client Type',
       dataIndex: 'client_type',
       key: 'client_type',
-      render: (v) => v ? <Tag color="blue">{v}</Tag> : '—',
+      render: (v) => v ? <Tag color="blue">{v}</Tag> : <Text type="secondary">All</Text>,
+    },
+    {
+      title: 'Sizes',
+      dataIndex: 'sizes',
+      key: 'sizes',
+      render: (v) => {
+        const arr = Array.isArray(v) ? v : []
+        return arr.length
+          ? arr.map((s) => <Tag key={s} style={{ marginBottom: 2 }}>{s}</Tag>)
+          : <Text type="secondary">—</Text>
+      },
     },
     {
       title: 'Unit Price',
-      dataIndex: 'unit_price',
-      key: 'unit_price',
-      render: (v) => v != null ? `R ${Number(v).toFixed(2)}` : '—',
-    },
-    {
-      title: 'Description',
-      dataIndex: 'description',
-      key: 'description',
-      ellipsis: true,
+      dataIndex: 'price',
+      key: 'price',
+      render: (v, row) => v != null
+        ? <Text strong>R {Number(v).toFixed(2)}</Text>
+        : <Text type="secondary">—</Text>,
     },
     {
       title: '',
@@ -112,25 +152,35 @@ export default function ProductsList() {
         onCancel={() => { setModalOpen(false); setEditing(null); form.resetFields() }}
         footer={null}
         width={480}
+        destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={(v) => saveMutation.mutate(v)} style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="Product Name" rules={[{ required: true }]}>
+          <Form.Item name="name" label="Product Name" rules={[{ required: true, message: 'Required' }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="category" label="Category" rules={[{ required: true }]}>
+          <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Required' }]}>
             <Select options={CATEGORIES.map((c) => ({ value: c, label: c.charAt(0).toUpperCase() + c.slice(1) }))} />
           </Form.Item>
-          <Form.Item name="client_type" label="Client Type (optional)">
+          <Form.Item name="clientType" label="Client Type (optional — leave blank for all)">
             <Select
               allowClear
               options={CLIENT_TYPES.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
             />
           </Form.Item>
-          <Form.Item name="unit_price" label="Unit Price (R)">
-            <InputNumber min={0} precision={2} prefix="R" style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="description" label="Description">
-            <Input.TextArea rows={3} />
+          <Space style={{ width: '100%' }}>
+            <Form.Item name="price" label="Unit Price" rules={[{ required: true, message: 'Required' }]} style={{ flex: 1 }}>
+              <InputNumber min={0} precision={2} prefix="R" style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="currency" label="Currency" initialValue="ZAR" style={{ width: 90 }}>
+              <Select options={[{ value: 'ZAR', label: 'ZAR' }, { value: 'USD', label: 'USD' }]} />
+            </Form.Item>
+          </Space>
+          <Form.Item
+            name="sizes"
+            label="Available Sizes"
+            extra="Comma-separated, e.g. XS, S, M, L, XL, XXL"
+          >
+            <Input placeholder="XS, S, M, L, XL, XXL" />
           </Form.Item>
           <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
             <Button onClick={() => { setModalOpen(false); setEditing(null) }} style={{ marginRight: 8 }}>

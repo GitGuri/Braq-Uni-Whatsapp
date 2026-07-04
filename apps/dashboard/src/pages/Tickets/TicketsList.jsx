@@ -1,17 +1,24 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Table, Card, Typography, Tag, Select, Row, Col, Space } from 'antd'
+import { Table, Card, Typography, Tag, Select, Row, Col } from 'antd'
 import dayjs from 'dayjs'
 import { listTickets } from '../../api/tickets.js'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
 const STATUS_COLORS = {
-  open: 'processing',
+  open:        'processing',
   in_progress: 'warning',
-  resolved: 'success',
-  closed: 'default',
+  resolved:    'success',
+  closed:      'default',
+}
+
+const CATEGORY_LABELS = {
+  wrong_item:   'Wrong item',
+  defective:    'Defective',
+  missing_item: 'Missing item',
+  other:        'Other',
 }
 
 export default function TicketsList() {
@@ -27,21 +34,29 @@ export default function TicketsList() {
 
   const columns = [
     {
-      title: 'ID',
+      title: 'Ref',
       dataIndex: 'id',
       key: 'id',
-      render: (v) => <code style={{ fontSize: 12 }}>{v?.slice(0, 8)}…</code>,
+      render: (v) => <Text code style={{ fontSize: 12 }}>{v?.slice(0, 8)}</Text>,
+      width: 90,
     },
     {
       title: 'Client',
       key: 'client',
-      render: (_, row) => row.client_name ?? row.client_wa_id ?? '—',
+      render: (_, row) => (
+        <span>
+          <Text strong>{row.client_name ?? '—'}</Text>
+          {row.client_wa && (
+            <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>{row.client_wa}</Text>
+          )}
+        </span>
+      ),
     },
     {
-      title: 'Type',
-      dataIndex: 'ticket_type',
-      key: 'ticket_type',
-      render: (v) => <Tag>{v}</Tag>,
+      title: 'Category',
+      dataIndex: 'category',
+      key: 'category',
+      render: (v) => <Tag>{CATEGORY_LABELS[v] ?? v}</Tag>,
     },
     {
       title: 'Status',
@@ -49,26 +64,38 @@ export default function TicketsList() {
       key: 'status',
       render: (s) => (
         <Tag color={STATUS_COLORS[s] ?? 'default'}>
-          {s?.replace('_', ' ')?.charAt(0).toUpperCase() + s?.replace('_', ' ')?.slice(1)}
+          {s?.replace('_', ' ')}
         </Tag>
       ),
     },
     {
       title: 'Assigned To',
       key: 'assigned',
-      render: (_, row) => row.assigned_name ?? <span style={{ color: '#999' }}>Unassigned</span>,
+      render: (_, row) =>
+        row.assigned_name ?? <Text type="secondary">Unassigned</Text>,
     },
     {
-      title: 'Overdue',
-      dataIndex: 'is_overdue',
-      key: 'is_overdue',
-      render: (v) => v ? <Tag color="error">Overdue</Tag> : null,
+      title: 'SLA',
+      key: 'sla',
+      render: (_, row) => {
+        if (['resolved', 'closed'].includes(row.status)) return null
+        if (row.is_overdue) return <Tag color="error">Overdue</Tag>
+        return (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Due {dayjs(row.sla_due_at).format('HH:mm')}
+          </Text>
+        )
+      },
     },
     {
       title: 'Created',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (v) => dayjs(v).format('DD MMM YYYY'),
+      render: (v) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {dayjs(v).format('DD MMM YYYY')}
+        </Text>
+      ),
     },
   ]
 
@@ -84,10 +111,10 @@ export default function TicketsList() {
               placeholder="Filter by status"
               style={{ width: '100%' }}
               options={[
-                { value: 'open', label: 'Open' },
+                { value: 'open',        label: 'Open' },
                 { value: 'in_progress', label: 'In Progress' },
-                { value: 'resolved', label: 'Resolved' },
-                { value: 'closed', label: 'Closed' },
+                { value: 'resolved',    label: 'Resolved' },
+                { value: 'closed',      label: 'Closed' },
               ]}
               onChange={(v) => setFilters((f) => ({ ...f, status: v }))}
             />
@@ -95,9 +122,9 @@ export default function TicketsList() {
           <Col xs={24} sm={8}>
             <Select
               allowClear
-              placeholder="Overdue only"
+              placeholder="All tickets"
               style={{ width: '100%' }}
-              options={[{ value: 'true', label: 'Overdue tickets' }]}
+              options={[{ value: 'true', label: 'Overdue only' }]}
               onChange={(v) => setFilters((f) => ({ ...f, overdue: v }))}
             />
           </Col>
@@ -112,9 +139,11 @@ export default function TicketsList() {
           loading={isLoading}
           size="middle"
           pagination={{ pageSize: 20 }}
-          onRow={(row) => ({ onClick: () => navigate(`/tickets/${row.id}`) })}
-          rowHoverable
-          style={{ cursor: 'pointer' }}
+          onRow={(row) => ({
+            onClick: () => navigate(`/tickets/${row.id}`),
+            style: { cursor: 'pointer' },
+          })}
+          rowClassName={(row) => row.is_overdue ? 'row-overdue' : ''}
         />
       </Card>
     </div>

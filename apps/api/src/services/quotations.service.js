@@ -191,17 +191,21 @@ export async function approveQuotation(id, lineItems, staffId) {
 }
 
 // ── List quotations ───────────────────────────────────────────────────────────
-export async function listQuotations() {
-  const { rows } = await query(`
-    SELECT q.*,
-           c.name            AS client_name,
-           c.whatsapp_number AS client_wa,
-           s.name            AS approved_by_name
-    FROM quotations q
-    LEFT JOIN clients c ON q.client_id  = c.id
-    LEFT JOIN staff   s ON q.approved_by = s.id
-    ORDER BY q.created_at DESC
-  `);
+export async function listQuotations({ status } = {}) {
+  const params = [];
+  const where  = status ? [`q.status = $${params.push(status)}`] : [];
+  const { rows } = await query(
+    `SELECT q.*,
+            c.name            AS client_name,
+            c.whatsapp_number AS client_wa,
+            s.name            AS approved_by_name
+     FROM quotations q
+     LEFT JOIN clients c ON q.client_id  = c.id
+     LEFT JOIN staff   s ON q.approved_by = s.id
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY q.created_at DESC`,
+    params
+  );
   return rows;
 }
 

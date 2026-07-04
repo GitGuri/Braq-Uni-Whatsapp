@@ -16,6 +16,7 @@ import {
   MenuUnfoldOutlined,
   MessageOutlined,
   BookOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext.jsx'
@@ -65,6 +66,8 @@ export default function DashboardLayout() {
     { type: 'divider' },
     { key: '/products', icon: <AppstoreOutlined />, label: 'Products' },
     { key: '/school-catalog', icon: <BookOutlined />, label: 'School Catalog' },
+    { type: 'divider' },
+    { key: '/staff', icon: <SettingOutlined />, label: 'Staff' },
   ]
 
   const selectedKey = NAV_ITEMS.filter(i => i.key && i.key !== '/').find(
