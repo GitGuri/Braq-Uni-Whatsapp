@@ -20,14 +20,18 @@ async function send(subject, text) {
     return;
   }
   const to = consultants.map((c) => c.email);
-  const { error } = await resend.emails.send({
+  logger.info('Sending consultant email', { from: config.resend.fromEmail, to, subject });
+  const { data, error } = await resend.emails.send({
     from: `Braq Connect <${config.resend.fromEmail}>`,
     to,
     subject,
     text,
   });
-  if (error) throw new Error(`Resend error: ${error.message}`);
-  logger.info('Consultant notification sent', { subject, recipients: to.length });
+  if (error) {
+    logger.error('Resend rejected email', { error, to, from: config.resend.fromEmail });
+    throw new Error(`Resend error: ${JSON.stringify(error)}`);
+  }
+  logger.info('Consultant notification sent', { subject, recipients: to.length, messageId: data?.id });
 }
 
 // ── Template helpers ───────────────────────────────────────────────────────────

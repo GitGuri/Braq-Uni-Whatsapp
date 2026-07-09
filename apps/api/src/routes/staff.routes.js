@@ -8,3 +8,4 @@ staffRouter.post('/login', staffController.login);
 staffRouter.get('/me', requireAuth, staffController.me);
 staffRouter.get('/', requireAuth, requireRole('admin', 'manager'), staffController.list);
 staffRouter.post('/', requireAuth, requireRole('admin'), staffController.create);
+staffRouter.delete('/:id', requireAuth, requireRole('admin'), staffController.remove);

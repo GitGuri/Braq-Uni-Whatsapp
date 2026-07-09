@@ -8,6 +8,7 @@ import OrderDetail from './pages/Orders/OrderDetail.jsx'
 import ClientsList from './pages/Clients/ClientsList.jsx'
 import ClientDetail from './pages/Clients/ClientDetail.jsx'
 import QuotationsList from './pages/Quotations/QuotationsList.jsx'
+import QuotationBuilder from './pages/Quotations/QuotationBuilder.jsx'
 import ProductsList from './pages/Products/ProductsList.jsx'
 import TicketsList from './pages/Tickets/TicketsList.jsx'
 import TicketDetail from './pages/Tickets/TicketDetail.jsx'
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/inbox" element={<InboxList />} />
           <Route path="/inbox/:id" element={<ConversationChat />} />
           <Route path="/quotations" element={<QuotationsList />} />
+          <Route path="/quotations/:id/build" element={<QuotationBuilder />} />
           <Route path="/orders" element={<OrdersList />} />
           <Route path="/orders/:id" element={<OrderDetail />} />
           <Route path="/tickets" element={<TicketsList />} />

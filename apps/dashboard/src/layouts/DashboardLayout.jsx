@@ -1,124 +1,149 @@
 import { useState } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Typography, theme, Badge } from 'antd'
+import { Avatar, Typography } from 'antd'
 import {
-  DashboardOutlined, ShoppingCartOutlined, TeamOutlined, FileTextOutlined,
-  AppstoreOutlined, CustomerServiceOutlined, LogoutOutlined, UserOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, MessageOutlined, SettingOutlined,
+  MenuOutlined,
+  DashboardOutlined, MessageOutlined, FileTextOutlined, ShoppingCartOutlined,
+  CustomerServiceOutlined, TeamOutlined, AppstoreOutlined, SettingOutlined,
+  UserOutlined,
 } from '@ant-design/icons'
-import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext.jsx'
-import { getUnreadCount } from '../api/conversations.js'
 
-const { Header, Sider, Content } = Layout
 const { Text } = Typography
 
-function InboxLabel({ collapsed, waiting }) {
-  if (collapsed) return <Badge count={waiting} size="small" offset={[4, 0]}><span /></Badge>
-  return (
-    <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-      Inbox
-      {waiting > 0 && <Badge count={waiting} size="small" style={{ marginLeft: 8 }} />}
-    </span>
-  )
-}
+const ACCENT    = '#c0392b'
+const NAVBAR_H  = 60
+const SIDEBAR_W = 240
+const SIDEBAR_SM = 68
+
+const NAV = [
+  { key: '/',           icon: <DashboardOutlined />,       label: 'Dashboard' },
+  { key: '/inbox',      icon: <MessageOutlined />,         label: 'Inbox' },
+  { divider: true },
+  { key: '/quotations', icon: <FileTextOutlined />,     label: 'Quotations' },
+  { key: '/orders',     icon: <ShoppingCartOutlined />, label: 'Orders' },
+  { divider: true },
+  { key: '/tickets',    icon: <CustomerServiceOutlined />, label: 'Tickets' },
+  { key: '/clients',    icon: <TeamOutlined />,            label: 'Clients' },
+  { divider: true },
+  { key: '/products',   icon: <AppstoreOutlined />,        label: 'Products' },
+  { key: '/staff',      icon: <SettingOutlined />,         label: 'Staff' },
+]
 
 export default function DashboardLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const { staff, logout } = useAuth()
-  const navigate  = useNavigate()
-  const location  = useLocation()
-  const { token } = theme.useToken()
+  const navigate          = useNavigate()
+  const location          = useLocation()
 
-  const { data: unreadData } = useQuery({
-    queryKey: ['unread-count'],
-    queryFn: getUnreadCount,
-    refetchInterval: 15_000,
-  })
-  const waiting = unreadData?.waiting ?? 0
+  const isActive = (key) =>
+    key === '/' ? location.pathname === '/' : location.pathname.startsWith(key)
 
-  // 8 pages: Dashboard, Inbox, Quotations, Orders, Tickets, Clients, Products, Staff
-  const NAV_ITEMS = [
-    { key: '/',           icon: <DashboardOutlined />,      label: 'Dashboard' },
-    { key: '/inbox',      icon: <MessageOutlined />,        label: <InboxLabel collapsed={collapsed} waiting={waiting} /> },
-    { type: 'divider' },
-    { key: '/quotations', icon: <FileTextOutlined />,       label: 'Quotations' },
-    { key: '/orders',     icon: <ShoppingCartOutlined />,   label: 'Orders' },
-    { type: 'divider' },
-    { key: '/tickets',    icon: <CustomerServiceOutlined />,label: 'Tickets' },
-    { key: '/clients',    icon: <TeamOutlined />,           label: 'Clients' },
-    { type: 'divider' },
-    { key: '/products',   icon: <AppstoreOutlined />,       label: 'Products' },
-    { key: '/staff',      icon: <SettingOutlined />,        label: 'Staff' },
-  ]
-
-  const selectedKey = NAV_ITEMS
-    .filter(i => i.key && i.key !== '/')
-    .find(i => location.pathname.startsWith(i.key))?.key ?? '/'
-
-  const userMenu = {
-    items: [{
-      key: 'logout', icon: <LogoutOutlined />, label: 'Log out', danger: true,
-      onClick: () => { logout(); navigate('/login') },
-    }],
-  }
+  const sW = collapsed ? SIDEBAR_SM : SIDEBAR_W
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider
-        collapsible collapsed={collapsed} trigger={null} width={220}
-        style={{ background: '#001529', position: 'fixed', height: '100vh', left: 0, top: 0, bottom: 0, zIndex: 100 }}
-      >
-        <div style={{
-          height: 64, display: 'flex', alignItems: 'center',
-          justifyContent: collapsed ? 'center' : 'flex-start',
-          padding: collapsed ? 0 : '0 20px',
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
-        }}>
-          {collapsed
-            ? <Text style={{ color: '#1677ff', fontSize: 20, fontWeight: 700 }}>B</Text>
-            : <Text style={{ color: '#fff', fontSize: 16, fontWeight: 700, letterSpacing: 0.5 }}>Braq Connect</Text>
-          }
+    <div style={{ background: '#0a0a0a', minHeight: '100vh' }}>
+
+      {/* ════════════════ NAVBAR ════════════════ */}
+      <header style={{
+        position: 'fixed', top: 0, left: 0, right: 0, height: NAVBAR_H, zIndex: 200,
+        background: '#0d0d0d', borderBottom: '1px solid #1a1a1a',
+        display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px',
+      }}>
+        {/* Hamburger */}
+        <button className="braq-icon-btn" onClick={() => setCollapsed(c => !c)}>
+          <MenuOutlined />
+        </button>
+
+        {/* Brand */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: 7, background: ACCENT,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 800, fontSize: 13, color: '#fff',
+          }}>B</div>
+          <span style={{ color: '#e8e8e8', fontSize: 14, fontWeight: 700, letterSpacing: 0.2 }}>
+            Braq Connect
+          </span>
         </div>
 
-        <Menu
-          theme="dark" mode="inline"
-          selectedKeys={[selectedKey]}
-          items={NAV_ITEMS}
-          onClick={({ key }) => navigate(key)}
-          style={{ borderRight: 0, marginTop: 8 }}
-        />
-      </Sider>
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
 
-      <Layout style={{ marginLeft: collapsed ? 80 : 220, transition: 'margin-left 0.2s' }}>
-        <Header style={{
-          position: 'sticky', top: 0, zIndex: 99,
-          background: token.colorBgContainer,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}>
+        {/* Right: avatar + logout only */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Avatar icon={<UserOutlined />} size={30}
+            style={{ background: '#2a2a2a', cursor: 'pointer', flexShrink: 0 }} />
+          <Text style={{ color: '#555', fontSize: 12 }}>
+            {staff?.name ?? 'Staff'}
+          </Text>
           <button
-            onClick={() => setCollapsed(!collapsed)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: token.colorText, padding: '4px 8px', borderRadius: token.borderRadius }}
+            style={{
+              background: 'none', border: '1px solid #252525', cursor: 'pointer',
+              color: '#666', fontSize: 12, padding: '4px 10px',
+              borderRadius: 5, transition: 'all 0.15s', fontFamily: 'inherit',
+            }}
+            onMouseOver={e => { e.currentTarget.style.color = ACCENT; e.currentTarget.style.borderColor = ACCENT }}
+            onMouseOut={e => { e.currentTarget.style.color = '#666'; e.currentTarget.style.borderColor = '#252525' }}
+            onClick={() => { logout(); navigate('/login') }}
           >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            Logout
           </button>
+        </div>
+      </header>
 
-          <Dropdown menu={userMenu} placement="bottomRight">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-              <Avatar icon={<UserOutlined />} style={{ background: '#1677ff' }} />
-              <div style={{ lineHeight: 1.2 }}>
-                <Text strong style={{ display: 'block', fontSize: 13 }}>{staff?.name}</Text>
-                <Text type="secondary" style={{ fontSize: 11, textTransform: 'capitalize' }}>{staff?.role}</Text>
-              </div>
-            </div>
-          </Dropdown>
-        </Header>
+      {/* ════════════════ BODY ════════════════ */}
+      <div style={{ display: 'flex', paddingTop: NAVBAR_H }}>
 
-        <Content style={{ margin: 24, minHeight: 'calc(100vh - 112px)' }}>
+        {/* ════════════════ SIDEBAR ════════════════ */}
+        <aside style={{
+          position: 'fixed', left: 0, top: NAVBAR_H, bottom: 0,
+          width: sW,
+          background: '#0d0d0d', borderRight: '1px solid #1a1a1a',
+          display: 'flex', flexDirection: 'column',
+          overflowY: 'auto', overflowX: 'hidden',
+          transition: 'width 0.2s ease', zIndex: 100,
+        }}>
+          <nav style={{ flex: 1, paddingTop: 8, paddingBottom: 12 }}>
+            {NAV.map((item, idx) => {
+              if (item.divider) return (
+                <div key={idx} style={{ height: 1, background: '#1a1a1a', margin: '6px 16px' }} />
+              )
+
+              const active = isActive(item.key)
+
+              return (
+                <div
+                  key={item.key}
+                  className={`braq-nav-item${active ? ' active' : ''}`}
+                  onClick={() => navigate(item.key)}
+                  title={collapsed ? item.label : undefined}
+                >
+                  <span style={{ fontSize: 15, flexShrink: 0, color: 'inherit' }}>
+                    {item.icon}
+                  </span>
+                  {!collapsed && (
+                    <span style={{ flex: 1, color: 'inherit', fontWeight: active ? 600 : 400 }}>
+                      {item.label}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </nav>
+        </aside>
+
+        {/* ════════════════ CONTENT ════════════════ */}
+        <main style={{
+          marginLeft: sW,
+          flex: 1,
+          padding: 24,
+          minHeight: `calc(100vh - ${NAVBAR_H}px)`,
+          transition: 'margin-left 0.2s ease',
+        }}>
           <Outlet />
-        </Content>
-      </Layout>
-    </Layout>
+        </main>
+      </div>
+    </div>
   )
 }

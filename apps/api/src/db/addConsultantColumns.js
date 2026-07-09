@@ -12,12 +12,14 @@ const steps = [
   `ALTER TABLE quotations ADD COLUMN IF NOT EXISTS notified_at         TIMESTAMPTZ`,
   `ALTER TABLE quotations ADD COLUMN IF NOT EXISTS staff_reminder_sent_at TIMESTAMPTZ`,
 
-  // tickets — assigned_staff_id already exists; add tracking columns
+  // tickets — add assigned_staff_id (IF NOT EXISTS covers new schema where it already exists)
+  `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assigned_staff_id UUID REFERENCES staff(id) ON DELETE SET NULL`,
   `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS claimed_at       TIMESTAMPTZ`,
   `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS notified_at      TIMESTAMPTZ`,
   `ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`,
 
-  // conversations — assigned_staff_id already exists; add tracking columns
+  // conversations — add assigned_staff_id (IF NOT EXISTS covers new schema where it already exists)
+  `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS assigned_staff_id UUID REFERENCES staff(id) ON DELETE SET NULL`,
   `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS claimed_at       TIMESTAMPTZ`,
   `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS notified_at      TIMESTAMPTZ`,
   `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`,

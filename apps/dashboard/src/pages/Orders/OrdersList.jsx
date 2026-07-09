@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Table, Card, Typography, Select, Input, Button, Tag, Space, Badge } from 'antd'
-import { SearchOutlined } from '@ant-design/icons'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Table, Card, Typography, Select, Input, Button, Tag, Space } from 'antd'
+import { SearchOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { listOrders } from '../../api/orders.js'
+import CreateOrderModal from './CreateOrderModal.jsx'
 
 const { Text } = Typography
 
@@ -36,10 +37,12 @@ const STAGE_COLORS = {
 
 export default function OrdersList() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [searchParams] = useSearchParams()
   const [stage, setStage] = useState(null)
   const [search, setSearch] = useState('')
   const [onHold, setOnHold] = useState(searchParams.get('onHold') === 'true' ? 'true' : null)
+  const [createOpen, setCreateOpen] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['orders', { stage, onHold }],
@@ -112,6 +115,9 @@ export default function OrdersList() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Text style={{ fontSize: 18, fontWeight: 700 }}>Orders</Text>
         <Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            Create Order
+          </Button>
           <Input
             prefix={<SearchOutlined />}
             placeholder="Search by reference or client…"
@@ -150,6 +156,16 @@ export default function OrdersList() {
           onRow={row => ({ onClick: () => navigate(`/orders/${row.id}`), style: { cursor: 'pointer' } })}
         />
       </Card>
+
+      <CreateOrderModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onSuccess={(order) => {
+          setCreateOpen(false)
+          qc.invalidateQueries({ queryKey: ['orders'] })
+          if (order?.id) navigate(`/orders/${order.id}`)
+        }}
+      />
     </div>
   )
 }

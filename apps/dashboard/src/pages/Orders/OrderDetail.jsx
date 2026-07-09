@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Card, Descriptions, Button, Tag, Space, Typography, Modal, Form, Input,
-  Select, InputNumber, Table, Spin, message, Divider, Row, Col, Switch, Alert,
+  Select, InputNumber, Table, Spin, message, Divider, Row, Col, Alert,
 } from 'antd'
 import {
   ArrowRightOutlined, DollarOutlined, StopOutlined, UserOutlined,
@@ -98,10 +98,12 @@ export default function OrderDetail() {
 
   const lineItems = (() => {
     try {
-      const q = data?.quotation
-      if (q?.line_items) return Array.isArray(q.line_items) ? q.line_items : []
-    } catch {}
-    return []
+      const items = order?.quotation_line_items
+      if (!items) return []
+      return Array.isArray(items) ? items : JSON.parse(items)
+    } catch {
+      return []
+    }
   })()
 
   const paymentCols = [
@@ -208,21 +210,84 @@ export default function OrderDetail() {
 
           {/* Line items from quotation */}
           {lineItems.length > 0 && (
-            <Card title="Line Items" style={{ marginTop: 16, borderRadius: 10 }}>
-              <Table
-                dataSource={lineItems}
-                rowKey={(r, i) => i}
-                size="small"
-                pagination={false}
-                columns={[
-                  { title: 'Item', render: (_, r) => r.name ?? r.description },
-                  { title: 'Qty', dataIndex: 'quantity' },
-                  { title: 'Sizes', dataIndex: 'sizes', render: v => v ?? '—' },
-                  { title: 'Unit Price', dataIndex: 'price', render: v => `R ${Number(v).toFixed(2)}` },
-                  { title: 'Total', dataIndex: 'lineTotal', render: v => `R ${Number(v).toFixed(2)}` },
-                ]}
-              />
-            </Card>
+            <>
+              <Card title="Line Items" style={{ marginTop: 16, borderRadius: 10 }}>
+                <Table
+                  dataSource={lineItems}
+                  rowKey={(_, i) => i}
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    {
+                      title: 'Item',
+                      render: (_, r) => (
+                        <div>
+                          <Text strong style={{ fontSize: 13 }}>{r.name ?? r.description}</Text>
+                          {r.colour && <Tag style={{ marginLeft: 6 }}>{r.colour}</Tag>}
+                        </div>
+                      ),
+                    },
+                    { title: 'Qty', dataIndex: 'quantity', width: 60 },
+                    {
+                      title: 'Unit Price',
+                      width: 100,
+                      render: (_, r) => `R ${Number(r.effectiveUnitPrice ?? r.price ?? 0).toFixed(2)}`,
+                    },
+                    {
+                      title: 'Total',
+                      dataIndex: 'lineTotal',
+                      width: 110,
+                      render: v => <Text strong>R {Number(v).toFixed(2)}</Text>,
+                    },
+                  ]}
+                />
+              </Card>
+
+              {/* Production Size Run */}
+              {lineItems.some(i => Array.isArray(i.sizes) && i.sizes.some(s => s.qty > 0)) && (
+                <Card title="Production Size Run" style={{ marginTop: 16, borderRadius: 10 }}>
+                  {lineItems.map((item, idx) => {
+                    const activeSizes = Array.isArray(item.sizes) ? item.sizes.filter(s => s.qty > 0) : []
+                    const total = activeSizes.reduce((s, sz) => s + (Number(sz.qty) || 0), 0)
+                    const brandingText = (() => {
+                      if (!item.branding) return null
+                      if (typeof item.branding === 'string') return item.branding || null
+                      const { type, position, detail } = item.branding
+                      if (!type || type === 'none') return null
+                      return [type.replace(/_/g, ' '), position, detail].filter(Boolean).join(' · ')
+                    })()
+                    return (
+                      <div key={idx}>
+                        <Space style={{ marginBottom: 8 }}>
+                          <Text strong>{item.name ?? item.description}</Text>
+                          {item.colour && <Tag>{item.colour}</Tag>}
+                          {brandingText && (
+                            <Text type="secondary" style={{ fontSize: 12 }}>({brandingText})</Text>
+                          )}
+                        </Space>
+                        {activeSizes.length > 0 ? (
+                          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 4 }}>
+                            {activeSizes.map(({ size, qty }) => (
+                              <div key={size} style={{ textAlign: 'center', minWidth: 40 }}>
+                                <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{size}</div>
+                                <div style={{ fontWeight: 700, fontSize: 18, lineHeight: 1 }}>{qty}</div>
+                              </div>
+                            ))}
+                            <div style={{ textAlign: 'center', minWidth: 50, borderLeft: '1px solid #444', paddingLeft: 16 }}>
+                              <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>TOTAL</div>
+                              <div style={{ fontWeight: 700, fontSize: 18, color: '#c0392b', lineHeight: 1 }}>{total}</div>
+                            </div>
+                          </div>
+                        ) : typeof item.sizes === 'string' && item.sizes ? (
+                          <Text type="secondary" style={{ fontSize: 12 }}>Sizes: {item.sizes}</Text>
+                        ) : null}
+                        {idx < lineItems.length - 1 && <Divider style={{ margin: '12px 0' }} />}
+                      </div>
+                    )
+                  })}
+                </Card>
+              )}
+            </>
           )}
         </Col>
 
@@ -239,7 +304,7 @@ export default function OrderDetail() {
           >
             {order.deposit_amount && (
               <div style={{ marginBottom: 12 }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>Deposit (50%)</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>Deposit (60%)</Text>
                 <div><Text strong>R {Number(order.deposit_amount).toFixed(2)}</Text></div>
                 <Text type="secondary" style={{ fontSize: 12 }}>Balance</Text>
                 <div><Text strong>R {Number(order.balance_amount ?? 0).toFixed(2)}</Text></div>

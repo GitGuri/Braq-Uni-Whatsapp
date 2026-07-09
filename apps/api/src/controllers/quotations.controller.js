@@ -1,23 +1,34 @@
 import { z } from 'zod';
 import * as quotationsService from '../services/quotations.service.js';
-import { validateQuotation } from '../validators/index.js';
 import { HttpError } from '../utils/httpError.js';
 import { logger } from '../utils/logger.js';
-import { query } from '../db/pool.js';
+import { query } from '../db/pool.js';  // used by claim()
+
+const SizeEntrySchema = z.object({
+  size: z.string().min(1),
+  qty:  z.coerce.number().int().nonnegative(),
+});
+
+const BrandingSpecSchema = z.object({
+  type:     z.enum(['none', 'embroidery', 'screen_print', 'sublimation', 'heat_transfer']).default('none'),
+  position: z.string().nullable().optional(),
+  detail:   z.string().nullable().optional(),
+});
 
 const LineItemSchema = z.object({
-  productId:      z.string().nullable().optional(),
-  name:           z.string().min(1),
-  category:       z.string().optional(),
-  price:          z.number().nonnegative(),
-  quantity:       z.number().int().positive(),
-  lineTotal:      z.number().nonnegative().optional(),
-  sizes:          z.string().optional(),
-  branding:       z.string().optional(),
-  aiSuggested:    z.boolean().optional(),
-  priceConfirmed: z.boolean().optional(),
-  confidence:     z.string().optional(),
-  aiNotes:        z.string().optional(),
+  productId:          z.string().nullable().optional(),
+  name:               z.string().min(1),
+  category:           z.string().nullable().optional(),
+  colour:             z.string().nullable().optional(),
+  sizes:              z.array(SizeEntrySchema).default([]),
+  quantity:           z.coerce.number().int().nonnegative(),
+  unitPrice:          z.coerce.number().nonnegative(),
+  brandingSurcharge:  z.coerce.number().nonnegative().default(0),
+  effectiveUnitPrice: z.coerce.number().nonnegative(),
+  branding:           BrandingSpecSchema.nullable().optional(),
+  lineTotal:          z.coerce.number().nonnegative(),
+  aiNote:             z.string().nullable().optional(),
+  priceConfirmed:     z.boolean().optional(),
 });
 
 const ApproveSchema = z.object({
@@ -54,7 +65,7 @@ export async function approve(req, res) {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const quotation = await quotationsService.approveQuotation(
+    const { quotation, whatsappSent } = await quotationsService.approveQuotation(
       req.params.id,
       parsed.data.lineItems,
       req.staff.id,
@@ -63,8 +74,9 @@ export async function approve(req, res) {
       quotationId: req.params.id,
       reference: quotation.reference,
       by: req.staff.email,
+      whatsappSent,
     });
-    res.json({ quotation });
+    res.json({ quotation, whatsappSent });
   } catch (err) {
     handleError(res, err, 'Failed to approve quotation');
   }
@@ -119,23 +131,25 @@ export async function getPdf(req, res) {
   try {
     const quotation = await quotationsService.getQuotationById(req.params.id);
 
-    // Draft quotations are not client-facing — treat as not found
     if (quotation.status === 'draft') {
       return res.status(404).json({ error: 'Quotation not found' });
     }
 
-    // Consultant-approved quotations must always render — they've been reviewed.
-    // Only block if there are literally no line items to show.
     if (!Array.isArray(quotation.line_items) || quotation.line_items.length === 0) {
       return res.status(422).json({ error: 'Quotation has no line items' });
     }
 
+    // getQuotationById now JOINs clients — client info is already on the quotation object
+    const clientInfo = {
+      name:             quotation.client_name,
+      organisation:     quotation.client_org,
+      whatsapp_number:  quotation.client_wa,
+      physical_address: quotation.client_address,
+    };
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${quotation.reference}.pdf"`);
-    const doc = quotationsService.renderQuotationPdf(quotation, {
-      client_name:      quotation.client_name,
-      whatsapp_number:  quotation.client_wa,
-    });
+    const doc = quotationsService.renderQuotationPdf(quotation, clientInfo);
     doc.pipe(res);
     doc.end();
   } catch (err) {

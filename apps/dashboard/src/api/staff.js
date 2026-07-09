@@ -8,3 +8,5 @@ export const me = () => api.get('/staff/me').then((r) => r.data)
 export const listStaff = () => api.get('/staff').then((r) => r.data)
 
 export const createStaff = (data) => api.post('/staff', data).then((r) => r.data)
+
+export const deleteStaff = (id) => api.delete(`/staff/${id}`).then((r) => r.data)

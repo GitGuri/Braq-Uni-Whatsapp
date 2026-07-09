@@ -60,6 +60,16 @@ export async function list(req, res) {
   }
 }
 
+// ── DELETE /staff/:id ─────────────────────────────────────────────────────────
+export async function remove(req, res) {
+  try {
+    await staffService.remove(req.params.id);
+    res.status(204).end();
+  } catch (err) {
+    handleError(res, err, 'Failed to delete staff member');
+  }
+}
+
 // ── POST /staff ────────────────────────────────────────────────────────────────
 export async function create(req, res) {
   const parsed = CreateStaffSchema.safeParse(req.body);

@@ -98,11 +98,11 @@ export default function InboxList() {
                 onClick={() => navigate(`/inbox/${conv.id}`)}
                 style={{
                   cursor: 'pointer',
-                  background: hasUnread ? '#f6ffed' : '#fff',
+                  background: hasUnread ? '#1a1500' : '#141414',
                   borderRadius: 8,
                   marginBottom: 8,
                   padding: '12px 16px',
-                  border: `1px solid ${hasUnread ? '#b7eb8f' : '#f0f0f0'}`,
+                  border: `1px solid ${hasUnread ? '#3a3000' : '#1e1e1e'}`,
                   transition: 'all 0.15s',
                 }}
               >

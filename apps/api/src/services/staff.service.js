@@ -33,6 +33,11 @@ export async function listAll() {
   return rows;
 }
 
+export async function remove(id) {
+  const { rowCount } = await query('DELETE FROM staff WHERE id = $1', [id]);
+  if (!rowCount) throw new HttpError(404, 'Staff not found');
+}
+
 export async function create({ name, email, password, role }) {
   const hash = await bcrypt.hash(password, 12);
   try {

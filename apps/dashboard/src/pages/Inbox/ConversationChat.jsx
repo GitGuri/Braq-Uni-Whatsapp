@@ -180,7 +180,7 @@ export default function ConversationChat() {
               placeholder="Assign to..."
               size="small"
               style={{ width: 180 }}
-              value={conv.assigned_staff ?? undefined}
+              value={conv.assigned_staff_id ?? undefined}
               options={staffList.map((s) => ({ value: s.id, label: s.name }))}
               onChange={(v) => assignMutation.mutate(v)}
               allowClear
@@ -246,7 +246,7 @@ export default function ConversationChat() {
         }}
       >
         {messages.length === 0 && (
-          <div style={{ textAlign: 'center', color: '#999', marginTop: 40 }}>
+          <div style={{ textAlign: 'center', color: '#444', marginTop: 40, fontSize: 13 }}>
             No messages yet
           </div>
         )}
@@ -283,16 +283,16 @@ export default function ConversationChat() {
                 <div style={{ maxWidth: '65%' }}>
                   <div
                     style={{
-                      background: isOutbound ? '#1677ff' : '#fff',
-                      color: isOutbound ? '#fff' : '#000',
-                      border: isOutbound ? 'none' : '1px solid #e8e8e8',
+                      background: isOutbound ? '#c0392b' : '#1e1e1e',
+                      color: '#e8e8e8',
+                      border: isOutbound ? 'none' : '1px solid #2a2a2a',
                       borderRadius: isOutbound ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
                       padding: '8px 12px',
                       fontSize: 14,
                       lineHeight: 1.5,
                       whiteSpace: 'pre-wrap',
                       wordBreak: 'break-word',
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                     }}
                   >
                     {msg.body}
@@ -300,7 +300,7 @@ export default function ConversationChat() {
                   <div
                     style={{
                       fontSize: 11,
-                      color: '#999',
+                      color: '#555',
                       marginTop: 2,
                       textAlign: isOutbound ? 'right' : 'left',
                       paddingLeft: isOutbound ? 0 : 4,

@@ -1,21 +1,19 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Table, Card, Typography, Button, Tag, Modal, Form, Input, Select, message, Avatar, Space,
+  Table, Card, Typography, Button, Tag, Modal, Form, Input, Select, message, Avatar, Space, Popconfirm,
 } from 'antd'
-import { PlusOutlined, UserOutlined } from '@ant-design/icons'
-import { listStaff, createStaff } from '../../api/staff.js'
+import { PlusOutlined, UserOutlined, DeleteOutlined } from '@ant-design/icons'
+import { listStaff, createStaff, deleteStaff } from '../../api/staff.js'
 
 const { Title, Text } = Typography
 
-const ROLES = ['admin', 'consultant', 'sales', 'production', 'dispatch']
+const ROLES = ['admin', 'consultant', 'manager']
 
 const ROLE_COLORS = {
-  admin:       'red',
-  consultant:  'blue',
-  sales:       'green',
-  production:  'orange',
-  dispatch:    'purple',
+  admin:      'red',
+  consultant: 'blue',
+  manager:    'green',
 }
 
 export default function StaffList() {
@@ -39,6 +37,15 @@ export default function StaffList() {
       qc.invalidateQueries({ queryKey: ['staff-list'] })
     },
     onError: (err) => message.error(err.response?.data?.error ?? 'Failed to create staff member'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => deleteStaff(id),
+    onSuccess: () => {
+      message.success('Staff member deleted')
+      qc.invalidateQueries({ queryKey: ['staff-list'] })
+    },
+    onError: (err) => message.error(err.response?.data?.error ?? 'Failed to delete staff member'),
   })
 
   const columns = [
@@ -77,6 +84,29 @@ export default function StaffList() {
         <Text type="secondary" style={{ fontSize: 12 }}>
           {v ? new Date(v).toLocaleDateString('en-ZA', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
         </Text>
+      ),
+    },
+    {
+      title: '',
+      key: 'actions',
+      width: 60,
+      render: (_, r) => (
+        <Popconfirm
+          title="Delete staff member?"
+          description={`This will permanently remove ${r.name}.`}
+          onConfirm={() => deleteMutation.mutate(r.id)}
+          okText="Delete"
+          okButtonProps={{ danger: true }}
+          cancelText="Cancel"
+        >
+          <Button
+            size="small"
+            danger
+            type="text"
+            icon={<DeleteOutlined />}
+            loading={deleteMutation.isPending && deleteMutation.variables === r.id}
+          />
+        </Popconfirm>
       ),
     },
   ]

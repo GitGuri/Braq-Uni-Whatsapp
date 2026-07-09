@@ -61,10 +61,13 @@ export async function getOrderById(id) {
             c.name            AS client_name,
             c.whatsapp_number,
             c.organisation,
-            s.name            AS staff_name
+            s.name            AS staff_name,
+            q.line_items      AS quotation_line_items,
+            q.reference       AS quotation_reference
      FROM orders o
      JOIN   clients c ON o.client_id         = c.id
-     LEFT JOIN staff s ON o.assigned_staff_id = s.id
+     LEFT JOIN staff   s ON o.assigned_staff_id = s.id
+     LEFT JOIN quotations q ON q.id = o.quotation_id
      WHERE o.id = $1`,
     [id]
   );

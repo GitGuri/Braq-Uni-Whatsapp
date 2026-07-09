@@ -56,17 +56,21 @@ export async function createFromFreeText(clientId, freeText) {
       continue;
     }
     const quantity  = item.quantity;
-    const lineTotal = Number(product.price) * quantity;
+    const unitPrice = Number(product.price);
     lineItems.push({
-      productId: product.id,
-      name:      product.name,
-      category:  product.category,
-      price:     Number(product.price),
+      productId:          product.id,
+      name:               product.name,
+      category:           product.category,
+      colour:             '',
+      sizes:              [],
       quantity,
-      lineTotal,
-      sizes:          item.sizes || null,
-      aiSuggested:    false,
-      priceConfirmed: true,
+      unitPrice,
+      brandingSurcharge:  0,
+      effectiveUnitPrice: unitPrice,
+      branding:           { type: 'none', position: '', detail: '' },
+      lineTotal:          unitPrice * quantity,
+      aiNote:             item.sizes ? `Sizes in request: ${item.sizes}` : null,
+      priceConfirmed:     true,
     });
   }
 
@@ -79,20 +83,24 @@ export async function createFromFreeText(clientId, freeText) {
         products,
         originalRequest: freeText,
       });
-      suggestedItems = (suggestion.items || []).map((s) => ({
-        productId:      null,
-        name:           s.description,
-        category:       'custom',
-        price:          Number(s.unitPrice),
-        quantity:       s.quantity,
-        lineTotal:      Number(s.unitPrice) * s.quantity,
-        sizes:          s.sizes || 'TBC',
-        branding:       s.branding || 'TBC',
-        aiSuggested:    true,
-        priceConfirmed: false,
-        confidence:     s.confidence,
-        aiNotes:        s.notes,
-      }));
+      suggestedItems = (suggestion.items || []).map((s) => {
+        const unitPrice = Number(s.unitPrice);
+        return {
+          productId:          null,
+          name:               s.description,
+          category:           'custom',
+          colour:             '',
+          sizes:              [],
+          quantity:           s.quantity,
+          unitPrice,
+          brandingSurcharge:  0,
+          effectiveUnitPrice: unitPrice,
+          branding:           { type: 'none', position: '', detail: '' },
+          lineTotal:          unitPrice * s.quantity,
+          aiNote:             `AI: R${unitPrice}/unit (${s.confidence}) — ${s.notes}`,
+          priceConfirmed:     false,
+        };
+      });
     } catch (err) {
       logger.error('AI pricing suggestion failed — draft saved without suggestions', { error: err.message });
     }
@@ -106,10 +114,10 @@ export async function createFromFreeText(clientId, freeText) {
 
   const { rows } = await query(
     `INSERT INTO quotations
-       (reference, client_id, status, line_items, subtotal, vat, total, currency, sla_remind_at)
-     VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8)
+       (reference, client_id, status, line_items, subtotal, vat, total, currency, sla_remind_at, notes)
+     VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9)
      RETURNING *`,
-    [reference, clientId, JSON.stringify(allItems), subtotal, vatAmount, total, currency, slaRemindAt]
+    [reference, clientId, JSON.stringify(allItems), subtotal, vatAmount, total, currency, slaRemindAt, freeText]
   );
 
   return { quotation: rows[0], unmatchedText: unmatchedDescriptions };
@@ -122,13 +130,8 @@ export async function approveQuotation(id, lineItems, staffId) {
     throw new HttpError(400, 'Only draft quotations can be approved');
   }
 
-  // Mark every line item as confirmed and recalculate
-  const confirmedItems = lineItems.map((item) => ({
-    ...item,
-    lineTotal:      Number(item.price) * Number(item.quantity),
-    priceConfirmed: true,
-  }));
-
+  // Confirm all items (lineTotal already computed by the builder client-side)
+  const confirmedItems = lineItems.map((item) => ({ ...item, priceConfirmed: true }));
   const { subtotal, vatAmount, total } = calcTotals(confirmedItems);
 
   const { rows } = await query(
@@ -147,19 +150,19 @@ export async function approveQuotation(id, lineItems, staffId) {
   );
   const quotation = rows[0];
 
-  // Send PDF to client via WhatsApp — generate in-memory and upload directly
-  // so we are never dependent on a publicly accessible API_BASE_URL.
-  const clientRow = await query('SELECT * FROM clients WHERE id = $1', [quotation.client_id]);
-  const clientData = clientRow.rows[0];
-  if (clientData?.whatsapp_number) {
+  // existing already has client data from getQuotationById JOIN
+  let whatsappSent = false;
+  if (existing.client_wa) {
     try {
       const pdfDoc    = renderQuotationPdf(quotation, {
-        client_name:     clientData.name,
-        whatsapp_number: clientData.whatsapp_number,
+        name:             existing.client_name,
+        organisation:     existing.client_org,
+        whatsapp_number:  existing.client_wa,
+        physical_address: existing.client_address,
       });
       const pdfBuffer = await pdfToBuffer(pdfDoc);
       const mediaId   = await uploadMedia(pdfBuffer, `${quotation.reference}.pdf`);
-      await sendDocument(clientData.whatsapp_number, {
+      await sendDocument(existing.client_wa, {
         mediaId,
         filename: `${quotation.reference}.pdf`,
         caption:
@@ -168,6 +171,7 @@ export async function approveQuotation(id, lineItems, staffId) {
           `*Total: R ${Number(total).toFixed(2)} (incl. VAT)*\n\n` +
           `Valid for 7 days. Reply *9* to speak to a consultant.`,
       });
+      whatsappSent = true;
     } catch (err) {
       logger.error('Failed to send approved quotation PDF via WhatsApp', {
         quotationId: id,
@@ -176,7 +180,7 @@ export async function approveQuotation(id, lineItems, staffId) {
     }
   }
 
-  return quotation;
+  return { quotation, whatsappSent };
 }
 
 // ── List quotations ───────────────────────────────────────────────────────────
@@ -188,13 +192,15 @@ export async function listQuotations({ status } = {}) {
             c.name            AS client_name,
             c.whatsapp_number AS client_wa,
             c.organisation    AS client_org,
-            s.name            AS approved_by_name,
+            assigned.name     AS assigned_name,
+            approver.name     AS approved_by_name,
             o.id              AS order_id,
             o.reference       AS order_reference
      FROM quotations q
-     LEFT JOIN clients c ON q.client_id  = c.id
-     LEFT JOIN staff   s ON q.approved_by = s.id
-     LEFT JOIN orders  o ON o.quotation_id = q.id
+     LEFT JOIN clients c        ON q.client_id        = c.id
+     LEFT JOIN staff   assigned ON q.assigned_staff_id = assigned.id
+     LEFT JOIN staff   approver ON q.approved_by       = approver.id
+     LEFT JOIN orders  o        ON o.quotation_id      = q.id
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY q.created_at DESC`,
     params
@@ -203,7 +209,18 @@ export async function listQuotations({ status } = {}) {
 }
 
 export async function getQuotationById(id) {
-  const { rows } = await query('SELECT * FROM quotations WHERE id = $1', [id]);
+  const { rows } = await query(
+    `SELECT q.*,
+            c.name             AS client_name,
+            c.organisation     AS client_org,
+            c.whatsapp_number  AS client_wa,
+            c.physical_address AS client_address,
+            c.client_type
+     FROM quotations q
+     LEFT JOIN clients c ON c.id = q.client_id
+     WHERE q.id = $1`,
+    [id]
+  );
   if (!rows.length) throw new HttpError(404, 'Quotation not found');
   return rows[0];
 }
@@ -296,51 +313,61 @@ export function renderQuotationPdf(quotation, clientInfo = {}) {
   doc.text('LINE TOTAL',  C.total, y + 6, { width: 75, align: 'right' });
   y += 22;
 
+  // Helpers for old-format and new-format line items
+  function getPdfItemPrice(item) {
+    return Number(item.effectiveUnitPrice ?? item.price ?? 0);
+  }
+  function getPdfSizesText(item) {
+    if (!item.sizes) return null;
+    if (typeof item.sizes === 'string') return item.sizes || null;
+    const active = item.sizes.filter(s => s.qty > 0);
+    return active.length > 0 ? active.map(s => `${s.size}×${s.qty}`).join('   ') : null;
+  }
+  function getPdfBrandingText(item) {
+    if (!item.branding) return null;
+    if (typeof item.branding === 'string') return item.branding || null;
+    const { type, position, detail } = item.branding;
+    if (!type || type === 'none') return null;
+    return [type.replace(/_/g, ' '), position?.replace(/_/g, ' '), detail].filter(Boolean).join(' · ');
+  }
+
   // ── Line items ───────────────────────────────────────────────────────────────
   const items = Array.isArray(quotation.line_items) ? quotation.line_items : [];
   let rowNum = 1;
 
   for (const item of items) {
-    // Shade alternate rows
-    if (rowNum % 2 === 0) {
-      doc.rect(L, y, COL, 28).fill('#fafafa');
-    }
-
-    const unitPrice = Number(item.price  ?? 0);
-    const lineTotal = Number(item.lineTotal ?? unitPrice * Number(item.quantity ?? 0));
-    const subLines  = [];
-    if (item.sizes   && item.sizes   !== 'TBC') subLines.push(`Sizes: ${item.sizes}`);
-    if (item.branding && item.branding !== 'None' && item.branding !== 'TBC')
-      subLines.push(`Branding: ${item.branding}`);
-    const rowH = subLines.length > 0 ? 38 : 22;
+    const unitPrice    = getPdfItemPrice(item);
+    const lineTotal    = Number(item.lineTotal ?? unitPrice * Number(item.quantity ?? 0));
+    const nameDisplay  = item.colour
+      ? `${item.name ?? item.description ?? '—'} — ${item.colour}`
+      : (item.name ?? item.description ?? '—');
+    const sizesText    = getPdfSizesText(item);
+    const brandingText = getPdfBrandingText(item);
+    const subLines     = [];
+    if (sizesText)    subLines.push(`Sizes: ${sizesText}`);
+    if (brandingText) subLines.push(`Branding: ${brandingText}`);
+    const rowH = subLines.length > 1 ? 54 : subLines.length === 1 ? 38 : 22;
 
     if (rowNum % 2 === 0) doc.rect(L, y, COL, rowH).fill('#fafafa');
 
     doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000')
        .text(String(rowNum),    L + 4,   y + 5, { width: 16 });
     doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000')
-       .text(item.name || item.description || '—', C.desc + 22, y + 5, { width: 238 });
+       .text(nameDisplay, C.desc + 22, y + 5, { width: 238 });
     doc.font('Helvetica').fontSize(9).fillColor('#000000')
        .text(String(item.quantity ?? '—'), C.qty,   y + 5, { width: 60, align: 'center' })
        .text(`R ${unitPrice.toFixed(2)}`,  C.unit,  y + 5, { width: 70, align: 'right' })
        .text(`R ${lineTotal.toFixed(2)}`,  C.total, y + 5, { width: 75, align: 'right' });
 
-    if (subLines.length > 0) {
+    subLines.forEach((line, i) => {
       doc.font('Helvetica').fontSize(7.5).fillColor(GREY)
-         .text(subLines.join('   ·   '), C.desc + 22, y + 18, { width: 273 });
-    }
-
-    // AI-suggested badge
-    if (item.aiSuggested && !item.priceConfirmed) {
-      doc.font('Helvetica').fontSize(7).fillColor('#d46b08')
-         .text('AI estimate', C.total, y + 18, { width: 75, align: 'right' });
-    }
+         .text(line, C.desc + 22, y + 18 + i * 14, { width: 283 });
+    });
 
     y += rowH + 4;
     rowNum++;
 
-    // Page break guard
-    if (y > 680) {
+    if (y > 660) {
       doc.addPage({ margin: 0 });
       y = 40;
     }
@@ -366,6 +393,11 @@ export function renderQuotationPdf(quotation, clientInfo = {}) {
   doc.font('Helvetica-Bold').fontSize(12).fillColor(NAVY)
      .text('TOTAL DUE:', tX, y, { width: 100 })
      .text(`R ${Number(quotation.total).toFixed(2)}`, tValX, y, { width: 90, align: 'right' });
+  y += 20;
+  doc.rect(tX - 4, y - 4, R - tX + 8, 22).fill('#fff8e6');
+  doc.font('Helvetica-Bold').fontSize(9).fillColor('#d46b08')
+     .text('60% Deposit Required:', tX, y, { width: 130 })
+     .text(`R ${(Number(quotation.total) * 0.6).toFixed(2)}`, tValX, y, { width: 90, align: 'right' });
 
   // ── Payment terms + banking ───────────────────────────────────────────────────
   y += 36;
