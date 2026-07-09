@@ -17,3 +17,19 @@ export const uploadSizeFile = multer({
     cb(null, true);
   },
 }).single('file');
+
+const ATTACHMENT_MIMETYPES = [
+  'image/jpeg', 'image/png', 'image/webp',
+  'application/pdf',
+];
+
+export const uploadAttachment = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+  fileFilter: (_req, file, cb) => {
+    if (!ATTACHMENT_MIMETYPES.includes(file.mimetype)) {
+      return cb(new Error('Only JPG, PNG, WebP, or PDF files are accepted'));
+    }
+    cb(null, true);
+  },
+}).single('attachment');

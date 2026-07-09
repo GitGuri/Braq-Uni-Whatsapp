@@ -103,13 +103,24 @@ export default function Login() {
           {/* ══════════════ LEFT: FORM ══════════════ */}
           <div className="braq-login" style={{ flex: '0 0 420px', minWidth: 0 }}>
             {/* Wordmark */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 32 }}>
-              <div style={{
-                width: 34, height: 34, borderRadius: 9, background: ACCENT,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontWeight: 800, fontSize: 15, color: '#fff',
-              }}>B</div>
-              <Text style={{ color: '#e8e8e8', fontSize: 15, fontWeight: 700 }}>Braq Connect™</Text>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 32 }}>
+              <img
+                src="/logo.png"
+                alt="Braq Uni"
+                style={{
+                  width: 48, height: 48, borderRadius: '50%', objectFit: 'cover',
+                  border: `2px solid ${ACCENT}55`,
+                  boxShadow: `0 0 16px rgba(192,57,43,0.2)`,
+                }}
+              />
+              <div style={{ lineHeight: 1.3 }}>
+                <Text style={{ color: '#e8e8e8', fontSize: 16, fontWeight: 700, display: 'block' }}>
+                  Braq Connect™
+                </Text>
+                <Text style={{ color: '#555', fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                  Uniform Specialists
+                </Text>
+              </div>
             </div>
 
             <Title level={2} style={{ color: '#f0f0f0', margin: '0 0 6px', fontWeight: 700, letterSpacing: -0.5 }}>
@@ -190,12 +201,13 @@ export default function Login() {
             justifyContent: 'center', textAlign: 'center',
             minHeight: 500, position: 'relative', overflow: 'hidden',
           }}>
-            {/* Subtle radial glow behind the orbits */}
+            {/* Radial glow behind the orbits — matches logo red ring */}
             <div style={{
               position: 'absolute', top: '50%', left: '50%',
               transform: 'translate(-50%, -50%)',
-              width: 320, height: 320, borderRadius: '50%',
-              background: 'radial-gradient(circle, rgba(192,57,43,0.08) 0%, transparent 70%)',
+              width: 340, height: 340, borderRadius: '50%',
+              background: 'radial-gradient(circle, rgba(192,57,43,0.12) 0%, transparent 68%)',
+              boxShadow: 'inset 0 0 0 1px rgba(192,57,43,0.1)',
               pointerEvents: 'none',
             }} />
 
@@ -213,18 +225,21 @@ export default function Login() {
 
             {/* Orbital glyph cluster */}
             <div style={{ position: 'relative', width: 300, height: 300, marginBottom: 32 }}>
-              {/* Centre "B" logo */}
-              <div style={{
-                position: 'absolute', top: '50%', left: '50%',
-                transform: 'translate(-50%, -50%)',
-                width: 52, height: 52, borderRadius: 14,
-                background: ACCENT,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontWeight: 900, fontSize: 22, color: '#fff',
-                boxShadow: `0 0 24px rgba(192,57,43,0.4)`,
-                animation: 'float-center 3s ease-in-out infinite',
-                zIndex: 2,
-              }}>B</div>
+              {/* Centre logo */}
+              <img
+                src="/logo.png"
+                alt="Braq Uni"
+                style={{
+                  position: 'absolute', top: '50%', left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: 72, height: 72, borderRadius: '50%',
+                  objectFit: 'cover',
+                  border: `3px solid ${ACCENT}`,
+                  boxShadow: `0 0 32px rgba(192,57,43,0.45), 0 0 0 6px rgba(192,57,43,0.08)`,
+                  animation: 'float-center 3s ease-in-out infinite',
+                  zIndex: 2,
+                }}
+              />
 
               {/* Orbiting glyphs */}
               {GLYPHS.map((g, i) => (

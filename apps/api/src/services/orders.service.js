@@ -88,7 +88,7 @@ export async function createOrder({ clientId, clientType, quotationId, poNumber,
   const { rows } = await query(
     `INSERT INTO orders
        (reference, client_id, client_type, quotation_id, po_number, assigned_staff_id, stage)
-     VALUES ($1,$2,$3,$4,$5,$6,'quotation_requested')
+     VALUES ($1,$2,$3,$4,$5,$6,'deposit_pending')
      RETURNING *`,
     [reference, clientId, clientType || 'retail', quotationId || null, poNumber || null, assignedStaffId || null]
   );
@@ -121,7 +121,7 @@ export async function convertFromQuotation(quotationId, staffId, { poNumber, ass
     `INSERT INTO orders
        (reference, client_id, client_type, quotation_id, po_number,
         assigned_staff_id, stage, payment_status, deposit_amount, balance_amount)
-     VALUES ($1,$2,$3,$4,$5,$6,'quotation_requested','unpaid',$7,$8)
+     VALUES ($1,$2,$3,$4,$5,$6,'deposit_pending','unpaid',$7,$8)
      RETURNING *`,
     [
       reference,
@@ -137,13 +137,15 @@ export async function convertFromQuotation(quotationId, staffId, { poNumber, ass
 
   const order = rows[0];
 
-  // Notify client
+  // Notify client with deposit request
   const { rows: clientRows } = await query('SELECT * FROM clients WHERE id = $1', [order.client_id]);
   const client = clientRows[0];
   if (client?.whatsapp_number) {
+    const items = Array.isArray(quotation.line_items) ? quotation.line_items
+      : (typeof quotation.line_items === 'string' ? JSON.parse(quotation.line_items) : []);
     await sendTextMessage(
       client.whatsapp_number,
-      TEMPLATES.STAGE_1_QUOTATION_REQUESTED({ reference: order.reference })
+      TEMPLATES.STAGE_DEPOSIT_PENDING({ reference: order.reference, items, deposit: depositAmt })
     ).catch((err) => logger.warn('Failed to notify client on order creation', { error: err.message }));
   }
 
@@ -153,8 +155,11 @@ export async function convertFromQuotation(quotationId, staffId, { poNumber, ass
 // ── Advance an order stage ─────────────────────────────────────────────────────
 export async function advanceOrderStage(orderId, staffId, { notes, estimatedCompletion, trackingNumber, deliveryType } = {}) {
   const { rows } = await query(
-    `SELECT o.*, c.whatsapp_number, c.name AS client_name
-     FROM orders o JOIN clients c ON o.client_id = c.id
+    `SELECT o.*, c.whatsapp_number, c.name AS client_name,
+            q.line_items AS quotation_line_items, o.deposit_amount
+     FROM orders o
+     JOIN clients c ON o.client_id = c.id
+     LEFT JOIN quotations q ON q.id = o.quotation_id
      WHERE o.id = $1`,
     [orderId]
   );
@@ -181,17 +186,30 @@ export async function advanceOrderStage(orderId, staffId, { notes, estimatedComp
   const updatedOrder = updated[0];
 
   if (order.whatsapp_number) {
-    const templateKey = to === 'completed' && deliveryType === 'delivery'
-      ? 'STAGE_10_COMPLETED_DELIVERY'
+    const items = (() => {
+      try {
+        const raw = order.quotation_line_items;
+        if (!raw) return [];
+        return Array.isArray(raw) ? raw : JSON.parse(raw);
+      } catch { return []; }
+    })();
+
+    const completionLabel = estimatedCompletion
+      ? new Date(estimatedCompletion).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+      : order.estimated_completion_date;
+
+    // Delivery type changes the template for the 'ready' stage
+    const templateKey = to === 'ready' && deliveryType === 'delivery'
+      ? 'STAGE_READY_DELIVERY'
       : templateForStage(to);
 
     if (templateKey && TEMPLATES[templateKey]) {
       const msg = TEMPLATES[templateKey]({
-        reference: order.reference,
-        estimatedCompletion: estimatedCompletion
-          ? new Date(estimatedCompletion).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
-          : order.estimated_completion_date,
+        reference:           order.reference,
+        items,
+        estimatedCompletion: completionLabel,
         trackingNumber,
+        deposit:             Number(order.deposit_amount ?? 0),
       });
       await sendTextMessage(order.whatsapp_number, msg)
         .catch((err) => logger.warn('Stage advance WhatsApp notify failed', { error: err.message }));
@@ -282,7 +300,7 @@ export async function createOrderFromBot(clientId, { lineItems = [], quotationId
     `INSERT INTO orders
        (reference, client_id, client_type, quotation_id, stage,
         payment_status, deposit_amount, balance_amount)
-     VALUES ($1,$2,'corporate',$3,'quotation_requested','unpaid',$4,$5)
+     VALUES ($1,$2,'corporate',$3,'deposit_pending','unpaid',$4,$5)
      RETURNING *`,
     [reference, clientId, quotationId, depositAmt, balanceAmt]
   );
@@ -295,6 +313,67 @@ export async function createOrderFromBot(clientId, { lineItems = [], quotationId
   }
 
   return rows[0];
+}
+
+// ── Update material / stock notes ────────────────────────────────────────────
+export async function updateMaterialNotes(orderId, notes) {
+  const { rows } = await query(
+    `UPDATE orders SET material_notes = $1::jsonb, updated_at = NOW()
+     WHERE id = $2 RETURNING *`,
+    [JSON.stringify(notes), orderId]
+  );
+  if (!rows.length) throw new HttpError(404, 'Order not found');
+  return rows[0];
+}
+
+// ── Digital proof helpers ─────────────────────────────────────────────────────
+export async function sendProofToClient(orderId, proofUrl, proofNotes) {
+  const { rows } = await query(
+    `UPDATE orders SET proof_url = $1, proof_status = 'sent', proof_notes = $2,
+      proof_sent_at = NOW(), updated_at = NOW()
+     WHERE id = $3
+     RETURNING *,
+       (SELECT whatsapp_number FROM clients WHERE id = client_id) AS whatsapp_number,
+       (SELECT id FROM conversations WHERE client_id = orders.client_id AND is_open = true ORDER BY created_at DESC LIMIT 1) AS conversation_id`,
+    [proofUrl, proofNotes || null, orderId]
+  );
+  if (!rows.length) throw new HttpError(404, 'Order not found');
+  const order = rows[0];
+  // Put the client's active conversation into proof_review state
+  if (order.conversation_id) {
+    await query(
+      `UPDATE conversations
+       SET state = 'proof_review', context = context || $1::jsonb, last_message_at = NOW()
+       WHERE id = $2`,
+      [JSON.stringify({ proofOrderId: orderId }), order.conversation_id]
+    );
+  }
+  return order;
+}
+
+export async function updateProofStatus(orderId, status, notes) {
+  const valid = ['approved', 'revision_requested', 'sent'];
+  if (!valid.includes(status)) throw new HttpError(400, `Invalid proof status: ${status}`);
+  const { rows } = await query(
+    `UPDATE orders SET proof_status = $1, proof_notes = COALESCE($2, proof_notes), updated_at = NOW()
+     WHERE id = $3 RETURNING *`,
+    [status, notes || null, orderId]
+  );
+  if (!rows.length) throw new HttpError(404, 'Order not found');
+  return rows[0];
+}
+
+// ── Size run sheet data ───────────────────────────────────────────────────────
+export async function getSizeRunSheetData(orderId) {
+  const { order, payments } = await getOrderById(orderId);
+  const rawItems = (() => {
+    try {
+      const raw = order.quotation_line_items;
+      if (!raw) return [];
+      return Array.isArray(raw) ? raw : JSON.parse(raw);
+    } catch { return []; }
+  })();
+  return { order, items: rawItems, payments };
 }
 
 // ── Stage label helper (for dashboard/tracking) ───────────────────────────────

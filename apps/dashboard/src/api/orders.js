@@ -12,3 +12,8 @@ export const listPayments   = (id)     => api.get(`/orders/${id}/payments`).then
 
 export const convertFromQuotation = (quotationId, data) =>
   api.post(`/orders/convert-from-quotation/${quotationId}`, data).then(r => r.data)
+
+export const updateMaterials  = (id, data) => api.patch(`/orders/${id}/materials`, data).then(r => r.data)
+export const sendProof        = (id, data) => api.post(`/orders/${id}/proof`, data).then(r => r.data)
+export const updateProofStatus = (id, data) => api.patch(`/orders/${id}/proof/status`, data).then(r => r.data)
+export const getSizeRunSheet  = (id)       => `/api/orders/${id}/size-run-sheet`

@@ -15,6 +15,8 @@ import TicketDetail from './pages/Tickets/TicketDetail.jsx'
 import InboxList from './pages/Inbox/InboxList.jsx'
 import ConversationChat from './pages/Inbox/ConversationChat.jsx'
 import StaffList from './pages/Staff/StaffList.jsx'
+import Broadcasts from './pages/Broadcasts.jsx'
+import RevenueDashboard from './pages/Analytics/RevenueDashboard.jsx'
 
 export default function App() {
   return (
@@ -36,6 +38,8 @@ export default function App() {
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/products" element={<ProductsList />} />
           <Route path="/staff" element={<StaffList />} />
+          <Route path="/broadcasts" element={<Broadcasts />} />
+          <Route path="/analytics" element={<RevenueDashboard />} />
         </Route>
       </Route>
 

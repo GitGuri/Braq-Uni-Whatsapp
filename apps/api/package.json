@@ -10,6 +10,7 @@
     "build": "echo 'no build step required'",
     "migrate": "node src/db/migrate.js",
     "migrate:consultant": "node src/db/addConsultantColumns.js",
+    "migrate:proof": "node src/db/addProofMaterialColumns.js",
     "seed": "node src/db/seed.js",
     "seed:catalog": "node src/db/seed-catalog.js",
     "seed:testing": "node src/db/seed-testing.js",

@@ -4,40 +4,38 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Card, Descriptions, Button, Tag, Space, Typography, Modal, Form, Input,
   Select, InputNumber, Table, Spin, message, Divider, Row, Col, Alert,
+  Badge,
 } from 'antd'
 import {
-  ArrowRightOutlined, DollarOutlined, StopOutlined, UserOutlined,
+  ArrowRightOutlined, DollarOutlined, StopOutlined, FilePdfOutlined,
+  CheckCircleOutlined, EditOutlined, SendOutlined, ExperimentOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { getOrder, advanceStage, setHold, recordPayment, assignOrder } from '../../api/orders.js'
+import { getOrder, advanceStage, setHold, recordPayment, updateMaterials, sendProof, updateProofStatus } from '../../api/orders.js'
 
 const { Text, Title } = Typography
 
-const STAGES = [
-  'quotation_requested', 'quotation_submitted', 'po_received',
-  'materials_procurement', 'production_scheduled', 'manufacturing',
-  'branding_embroidery', 'quality_control', 'packing_dispatch', 'completed',
-]
+const STAGES = ['deposit_pending', 'in_production', 'ready', 'completed']
 
 const STAGE_LABELS = {
-  quotation_requested:   '1. Quotation Requested',
-  quotation_submitted:   '2. Quotation Submitted',
-  po_received:           '3. PO Received',
-  materials_procurement: '4. Materials Procurement',
-  production_scheduled:  '5. Production Scheduled',
-  manufacturing:         '6. Manufacturing',
-  branding_embroidery:   '7. Branding & Embroidery',
-  quality_control:       '8. Quality Control',
-  packing_dispatch:      '9. Packing & Dispatch',
-  completed:             '10. Completed',
+  deposit_pending: '1. Awaiting Deposit',
+  in_production:   '2. In Production',
+  ready:           '3. Ready / Dispatched',
+  completed:       '4. Completed',
 }
 
 const STAGE_COLORS = {
-  quotation_requested: 'default', quotation_submitted: 'blue',
-  po_received: 'cyan', materials_procurement: 'geekblue',
-  production_scheduled: 'purple', manufacturing: 'magenta',
-  branding_embroidery: 'volcano', quality_control: 'orange',
-  packing_dispatch: 'gold', completed: 'green',
+  deposit_pending: 'orange',
+  in_production:   'blue',
+  ready:           'gold',
+  completed:       'green',
+}
+
+const STAGE_DESCRIPTIONS = {
+  deposit_pending: 'Order placed — awaiting 60% deposit to begin production',
+  in_production:   'Deposit received — manufacturing & branding underway',
+  ready:           'Production complete — ready for collection or dispatched',
+  completed:       'Order collected / delivered — all done',
 }
 
 export default function OrderDetail() {
@@ -47,9 +45,13 @@ export default function OrderDetail() {
   const [advanceModal, setAdvanceModal]   = useState(false)
   const [paymentModal, setPaymentModal]   = useState(false)
   const [holdModal, setHoldModal]         = useState(false)
-  const [advanceForm] = Form.useForm()
-  const [paymentForm] = Form.useForm()
-  const [holdForm]    = Form.useForm()
+  const [proofModal, setProofModal]       = useState(false)
+  const [materialsModal, setMaterialsModal] = useState(false)
+  const [advanceForm]   = Form.useForm()
+  const [paymentForm]   = Form.useForm()
+  const [holdForm]      = Form.useForm()
+  const [proofForm]     = Form.useForm()
+  const [materialsForm] = Form.useForm()
   const [msgApi, ctx] = message.useMessage()
 
   const { data, isLoading } = useQuery({
@@ -86,6 +88,36 @@ export default function OrderDetail() {
     onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed'),
   })
 
+  const proofMutation = useMutation({
+    mutationFn: (vals) => sendProof(id, vals),
+    onSuccess: () => {
+      msgApi.success('Proof sent to client via WhatsApp')
+      setProofModal(false)
+      proofForm.resetFields()
+      qc.invalidateQueries({ queryKey: ['order', id] })
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed to send proof'),
+  })
+
+  const proofStatusMutation = useMutation({
+    mutationFn: (vals) => updateProofStatus(id, vals),
+    onSuccess: () => {
+      msgApi.success('Proof status updated')
+      qc.invalidateQueries({ queryKey: ['order', id] })
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed'),
+  })
+
+  const materialsMutation = useMutation({
+    mutationFn: (vals) => updateMaterials(id, vals),
+    onSuccess: () => {
+      msgApi.success('Material notes saved')
+      setMaterialsModal(false)
+      qc.invalidateQueries({ queryKey: ['order', id] })
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Failed to save notes'),
+  })
+
   if (isLoading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
 
   const order    = data?.order
@@ -105,6 +137,17 @@ export default function OrderDetail() {
       return []
     }
   })()
+
+  const materialNotes = (() => {
+    try {
+      const raw = order?.material_notes
+      if (!raw) return {}
+      return typeof raw === 'object' ? raw : JSON.parse(raw)
+    } catch { return {} }
+  })()
+
+  const PROOF_STATUS_COLOR = { none: 'default', sent: 'processing', approved: 'success', revision_requested: 'warning' }
+  const PROOF_STATUS_LABEL = { none: 'No Proof', sent: 'Awaiting Approval', approved: 'Approved', revision_requested: 'Revision Requested' }
 
   const paymentCols = [
     { title: 'Type', dataIndex: 'type', render: (v) => <Tag>{v}</Tag> },
@@ -144,6 +187,16 @@ export default function OrderDetail() {
             }
             extra={
               <Space>
+                {lineItems.length > 0 && (
+                  <Button
+                    icon={<FilePdfOutlined />}
+                    href={`/api/orders/${id}/size-run-sheet`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Size Run Sheet
+                  </Button>
+                )}
                 {!isCompleted && !order.is_on_hold && (
                   <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setAdvanceModal(true)}>
                     Advance Stage
@@ -183,28 +236,40 @@ export default function OrderDetail() {
 
           {/* Stage progress bar */}
           <Card style={{ marginTop: 16, borderRadius: 10 }}>
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', overflowX: 'auto' }}>
+            <div style={{ display: 'flex', gap: 6 }}>
               {STAGES.map((s, i) => {
                 const done    = i < stageIdx
                 const current = i === stageIdx
                 return (
-                  <div
-                    key={s}
-                    style={{
-                      flex: '1 1 0', minWidth: 60, textAlign: 'center', padding: '6px 4px',
-                      background: current ? '#1677ff' : done ? '#e6f4ff' : '#f5f5f5',
-                      borderRadius: 6,
-                    }}
-                  >
-                    <Text style={{ fontSize: 10, color: current ? '#fff' : done ? '#1677ff' : '#aaa', fontWeight: current ? 700 : 400 }}>
-                      {i + 1}
-                    </Text>
+                  <div key={s} style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{
+                      padding: '10px 6px 8px',
+                      background: current ? '#c0392b' : done ? '#2d2d2d' : '#1a1a1a',
+                      borderRadius: 8,
+                      border: current ? '2px solid #c0392b' : done ? '1px solid #333' : '1px solid #222',
+                    }}>
+                      <div style={{
+                        fontSize: 18, fontWeight: 700, lineHeight: 1,
+                        color: current ? '#fff' : done ? '#aaa' : '#444',
+                      }}>{i + 1}</div>
+                      <div style={{
+                        fontSize: 10, marginTop: 4, lineHeight: 1.2,
+                        color: current ? '#ffccc7' : done ? '#666' : '#333',
+                      }}>
+                        {STAGE_LABELS[s].replace(/^\d+\.\s*/, '')}
+                      </div>
+                    </div>
+                    {i < STAGES.length - 1 && (
+                      <div style={{
+                        position: 'absolute', display: 'none', // connector handled by gap
+                      }} />
+                    )}
                   </div>
                 )
               })}
             </div>
-            <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>
-              Step {stageIdx + 1} of {STAGES.length}: {STAGE_LABELS[order.stage]}
+            <Text type="secondary" style={{ fontSize: 12, marginTop: 10, display: 'block' }}>
+              Stage {stageIdx + 1} of {STAGES.length}: <Text style={{ fontSize: 12 }}>{STAGE_DESCRIPTIONS[order.stage] ?? STAGE_LABELS[order.stage]}</Text>
             </Text>
           </Card>
 
@@ -326,6 +391,95 @@ export default function OrderDetail() {
               ))
             )}
           </Card>
+
+          {/* Digital Proof Card */}
+          <Card
+            title={
+              <Space>
+                <ExperimentOutlined />
+                Digital Proof
+                <Badge status={PROOF_STATUS_COLOR[order.proof_status ?? 'none']}
+                  text={<Text style={{ fontSize: 11 }}>{PROOF_STATUS_LABEL[order.proof_status ?? 'none']}</Text>} />
+              </Space>
+            }
+            extra={
+              <Button size="small" icon={<SendOutlined />} onClick={() => { proofForm.resetFields(); setProofModal(true) }}>
+                Send Proof
+              </Button>
+            }
+            style={{ marginTop: 16, borderRadius: 10 }}
+          >
+            {order.proof_url ? (
+              <>
+                <a href={order.proof_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+                  View Current Proof
+                </a>
+                {order.proof_notes && (
+                  <div style={{ marginTop: 6 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{order.proof_notes}</Text>
+                  </div>
+                )}
+                {order.proof_sent_at && (
+                  <div style={{ marginTop: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      Sent {dayjs(order.proof_sent_at).format('DD MMM YYYY HH:mm')}
+                    </Text>
+                  </div>
+                )}
+                {order.proof_status !== 'approved' && (
+                  <Space style={{ marginTop: 10 }}>
+                    <Button
+                      size="small" type="primary" icon={<CheckCircleOutlined />}
+                      onClick={() => proofStatusMutation.mutate({ status: 'approved' })}
+                      loading={proofStatusMutation.isPending}
+                    >
+                      Mark Approved
+                    </Button>
+                    <Button
+                      size="small" icon={<EditOutlined />}
+                      onClick={() => proofStatusMutation.mutate({ status: 'revision_requested' })}
+                      loading={proofStatusMutation.isPending}
+                    >
+                      Mark Revision
+                    </Button>
+                  </Space>
+                )}
+              </>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                No proof sent yet. Upload a design proof URL and send it to the client via WhatsApp.
+              </Text>
+            )}
+          </Card>
+
+          {/* Material / Stock Notes Card */}
+          <Card
+            title="Material & Stock Notes"
+            extra={
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => {
+                  materialsForm.setFieldsValue(materialNotes)
+                  setMaterialsModal(true)
+                }}
+              >
+                Edit
+              </Button>
+            }
+            style={{ marginTop: 16, borderRadius: 10 }}
+          >
+            {Object.keys(materialNotes).length === 0 ? (
+              <Text type="secondary" style={{ fontSize: 13 }}>No material notes yet.</Text>
+            ) : (
+              Object.entries(materialNotes).map(([k, v]) => v && (
+                <div key={k} style={{ marginBottom: 6 }}>
+                  <Text type="secondary" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>{k.replace(/_/g, ' ')}</Text>
+                  <div><Text style={{ fontSize: 13 }}>{v}</Text></div>
+                </div>
+              ))
+            )}
+          </Card>
         </Col>
       </Row>
 
@@ -342,21 +496,32 @@ export default function OrderDetail() {
           <Form.Item label="Notes (optional)" name="notes">
             <Input.TextArea rows={2} />
           </Form.Item>
-          <Form.Item label="Estimated Completion Date" name="estimatedCompletion">
-            <Input type="date" />
-          </Form.Item>
-          {nextStageName === 'packing_dispatch' && (
-            <Form.Item label="Tracking Number" name="trackingNumber">
-              <Input placeholder="Courier tracking number" />
+          {nextStageName === 'in_production' && (
+            <Form.Item label="Estimated Completion Date" name="estimatedCompletion">
+              <Input type="date" />
             </Form.Item>
           )}
-          {nextStageName === 'completed' && (
-            <Form.Item label="Delivery Type" name="deliveryType" initialValue="collection">
-              <Select options={[
-                { value: 'collection', label: 'Collection' },
-                { value: 'delivery', label: 'Delivery' },
-              ]} />
-            </Form.Item>
+          {nextStageName === 'ready' && (
+            <>
+              <Form.Item label="Delivery or Collection?" name="deliveryType" initialValue="collection">
+                <Select options={[
+                  { value: 'collection', label: 'Collection — customer collects from store' },
+                  { value: 'delivery',   label: 'Delivery — courier dispatched' },
+                ]} />
+              </Form.Item>
+              <Form.Item
+                noStyle
+                shouldUpdate={(prev, cur) => prev.deliveryType !== cur.deliveryType}
+              >
+                {({ getFieldValue }) =>
+                  getFieldValue('deliveryType') === 'delivery' ? (
+                    <Form.Item label="Tracking Number" name="trackingNumber">
+                      <Input placeholder="Courier tracking number" />
+                    </Form.Item>
+                  ) : null
+                }
+              </Form.Item>
+            </>
           )}
         </Form>
       </Modal>
@@ -413,6 +578,67 @@ export default function OrderDetail() {
           </Form.Item>
           <Form.Item label="Notes (optional)" name="notes">
             <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Send Proof Modal */}
+      <Modal
+        title="Send Design Proof to Client"
+        open={proofModal}
+        onCancel={() => { setProofModal(false); proofForm.resetFields() }}
+        onOk={() => proofMutation.mutate(proofForm.getFieldsValue())}
+        okText="Send via WhatsApp"
+        okButtonProps={{ loading: proofMutation.isPending }}
+      >
+        <Alert
+          type="info" showIcon
+          message="The proof URL will be sent to the client via WhatsApp. They can reply 'approve' or 'revise'."
+          style={{ marginBottom: 16 }}
+        />
+        <Form form={proofForm} layout="vertical">
+          <Form.Item label="Proof URL" name="proofUrl" rules={[{ required: true, message: 'Provide the proof URL' }, { type: 'url', message: 'Must be a valid URL' }]}>
+            <Input placeholder="https://drive.google.com/..." />
+          </Form.Item>
+          <Form.Item label="Message to client (optional)" name="notes">
+            <Input.TextArea rows={2} placeholder="e.g. Please review the logo placement on the left chest." />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Materials Modal */}
+      <Modal
+        title="Material & Stock Notes"
+        open={materialsModal}
+        onCancel={() => setMaterialsModal(false)}
+        onOk={() => materialsMutation.mutate(materialsForm.getFieldsValue())}
+        okText="Save Notes"
+        okButtonProps={{ loading: materialsMutation.isPending }}
+        width={520}
+      >
+        <Form form={materialsForm} layout="vertical" style={{ marginTop: 12 }}>
+          <Form.Item label="Fabric / Material" name="fabric">
+            <Input placeholder="e.g. 65/35 polycotton, navy blue" />
+          </Form.Item>
+          <Form.Item label="Supplier" name="supplier">
+            <Input placeholder="e.g. Bella Fabrics — Johannesburg" />
+          </Form.Item>
+          <Form.Item label="Lead Time" name="lead_time">
+            <Input placeholder="e.g. 7-10 business days from order" />
+          </Form.Item>
+          <Form.Item label="Stock Status" name="stock_status">
+            <Select
+              allowClear
+              options={[
+                { value: 'in_stock', label: 'In Stock' },
+                { value: 'ordered', label: 'Ordered from Supplier' },
+                { value: 'awaiting', label: 'Awaiting Allocation' },
+                { value: 'out_of_stock', label: 'Out of Stock' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="Additional Notes" name="notes">
+            <Input.TextArea rows={3} placeholder="Any other relevant manufacturing or stock notes..." />
           </Form.Item>
         </Form>
       </Modal>

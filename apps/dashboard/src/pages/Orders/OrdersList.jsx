@@ -10,29 +10,17 @@ import CreateOrderModal from './CreateOrderModal.jsx'
 const { Text } = Typography
 
 const STAGES = [
-  { value: 'quotation_requested',  label: '1. Quotation Requested' },
-  { value: 'quotation_submitted',  label: '2. Quotation Submitted' },
-  { value: 'po_received',          label: '3. PO Received' },
-  { value: 'materials_procurement',label: '4. Materials Procurement' },
-  { value: 'production_scheduled', label: '5. Production Scheduled' },
-  { value: 'manufacturing',        label: '6. Manufacturing' },
-  { value: 'branding_embroidery',  label: '7. Branding & Embroidery' },
-  { value: 'quality_control',      label: '8. Quality Control' },
-  { value: 'packing_dispatch',     label: '9. Packing & Dispatch' },
-  { value: 'completed',            label: '10. Completed' },
+  { value: 'deposit_pending', label: '1. Awaiting Deposit' },
+  { value: 'in_production',   label: '2. In Production' },
+  { value: 'ready',           label: '3. Ready / Dispatched' },
+  { value: 'completed',       label: '4. Completed' },
 ]
 
 const STAGE_COLORS = {
-  quotation_requested:   'default',
-  quotation_submitted:   'blue',
-  po_received:           'cyan',
-  materials_procurement: 'geekblue',
-  production_scheduled:  'purple',
-  manufacturing:         'magenta',
-  branding_embroidery:   'volcano',
-  quality_control:       'orange',
-  packing_dispatch:      'gold',
-  completed:             'green',
+  deposit_pending: 'orange',
+  in_production:   'blue',
+  ready:           'gold',
+  completed:       'green',
 }
 
 export default function OrdersList() {

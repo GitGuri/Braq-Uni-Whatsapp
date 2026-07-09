@@ -80,6 +80,29 @@ export async function uploadMedia(buffer, filename, mimeType = 'application/pdf'
   return mediaId;
 }
 
+// ── Send an image — pass either url (public link) or mediaId (pre-uploaded) ──
+export async function sendImage(to, { url, mediaId, caption }) {
+  try {
+    const imageField = mediaId
+      ? { id: mediaId, ...(caption ? { caption } : {}) }
+      : { link: url,   ...(caption ? { caption } : {}) };
+
+    const res = await client.post('/messages', {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'image',
+      image: imageField,
+    });
+    logger.info('WhatsApp image sent', { to, messageId: res.data?.messages?.[0]?.id });
+    return res.data?.messages?.[0]?.id || null;
+  } catch (err) {
+    const detail = err.response?.data?.error || err.message;
+    logger.error('Failed to send image', { to, error: detail });
+    throw new Error(`WhatsApp image send failed: ${JSON.stringify(detail)}`);
+  }
+}
+
 // ── Send a document — pass either url (link) or mediaId (pre-uploaded) ───────
 export async function sendDocument(to, { url, mediaId, filename, caption }) {
   try {

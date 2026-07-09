@@ -4,7 +4,7 @@ import { TEMPLATES } from './bot.templates.js';
 import { answerFaq, gatherQuotationInfo, parseQuotationRequest } from './ai.service.js';
 import { listProducts, listSchoolNames, listProductsBySchool } from './catalog.service.js';
 import { createFromFreeText, autoApproveQuotation, acceptQuotationByClient, getQuotationByReference } from './quotations.service.js';
-import { createOrderFromBot } from './orders.service.js';
+import { createOrderFromBot, updateProofStatus } from './orders.service.js';
 import { createTicket } from './tickets.service.js';
 import { getOrCreateClientByWhatsapp, updateClientProfile } from './clients.service.js';
 import { isWithinBusinessHours } from '../utils/businessHours.js';
@@ -78,6 +78,7 @@ const DATA_COLLECTION_STATES = new Set([
   'quotation_ask_description',
   'quotation_gathering',
   'order_gathering',
+  'proof_revision_describe',
   'ticket_ask_description',
   'corporate_account_query',
   'registration_name',
@@ -553,6 +554,45 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
       const tot  = parseFloat((sub + vat).toFixed(2));
       const dep  = parseFloat((tot * 0.60).toFixed(2));
       return R(TEMPLATES.ORDER_CONFIRM_DIRECT, { items: pendingItems, subtotal: sub, vat, total: tot, deposit: dep });
+    }
+
+    case 'proof_review': {
+      const t = body.trim().toLowerCase();
+      const orderId = convo.context.proofOrderId;
+      if (!orderId) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+
+      const { rows: oRows } = await query('SELECT * FROM orders WHERE id = $1', [orderId]);
+      if (!oRows.length) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+      const order = oRows[0];
+
+      if (/^approve$/i.test(t) || /^yes.*approve|^i.*approve/i.test(t)) {
+        await updateProofStatus(orderId, 'approved');
+        await updateState(convo.id, 'main_menu', { proofOrderId: null });
+        return R(TEMPLATES.PROOF_APPROVED, { reference: order.reference });
+      }
+      if (/^revise?$/i.test(t) || /^i.*need.*change|^please.*change/i.test(t)) {
+        await updateState(convo.id, 'proof_revision_describe', { proofOrderId: orderId });
+        return R(TEMPLATES.PROOF_REVISION_ASK, { reference: order.reference });
+      }
+      // Re-prompt
+      return R(TEMPLATES.PROOF_SENT, {
+        reference: order.reference,
+        proofUrl:  order.proof_url,
+        notes:     order.proof_notes,
+      });
+    }
+
+    case 'proof_revision_describe': {
+      const orderId = convo.context.proofOrderId;
+      const notes   = body.trim();
+      if (notes.length < 5) {
+        const { rows: oRows } = await query('SELECT reference FROM orders WHERE id = $1', [orderId]);
+        return R(TEMPLATES.PROOF_REVISION_ASK, { reference: oRows[0]?.reference ?? '' });
+      }
+      if (orderId) await updateProofStatus(orderId, 'revision_requested', notes);
+      await updateState(convo.id, 'main_menu', { proofOrderId: null });
+      const { rows: oRows2 } = await query('SELECT reference FROM orders WHERE id = $1', [orderId]);
+      return R(TEMPLATES.PROOF_REVISION_REQUESTED, { reference: oRows2[0]?.reference ?? '' });
     }
 
     case 'ticket_ask_category': {

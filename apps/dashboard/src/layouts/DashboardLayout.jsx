@@ -5,7 +5,7 @@ import {
   MenuOutlined,
   DashboardOutlined, MessageOutlined, FileTextOutlined, ShoppingCartOutlined,
   CustomerServiceOutlined, TeamOutlined, AppstoreOutlined, SettingOutlined,
-  UserOutlined,
+  UserOutlined, NotificationOutlined, BarChartOutlined,
 } from '@ant-design/icons'
 import { useAuth } from '../auth/AuthContext.jsx'
 
@@ -26,8 +26,11 @@ const NAV = [
   { key: '/tickets',    icon: <CustomerServiceOutlined />, label: 'Tickets' },
   { key: '/clients',    icon: <TeamOutlined />,            label: 'Clients' },
   { divider: true },
-  { key: '/products',   icon: <AppstoreOutlined />,        label: 'Products' },
-  { key: '/staff',      icon: <SettingOutlined />,         label: 'Staff' },
+  { key: '/products',    icon: <AppstoreOutlined />,         label: 'Products' },
+  { key: '/staff',       icon: <SettingOutlined />,          label: 'Staff' },
+  { divider: true },
+  { key: '/broadcasts',  icon: <NotificationOutlined />,    label: 'Broadcasts' },
+  { key: '/analytics',   icon: <BarChartOutlined />,         label: 'Analytics' },
 ]
 
 export default function DashboardLayout() {
@@ -56,15 +59,20 @@ export default function DashboardLayout() {
         </button>
 
         {/* Brand */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <div style={{
-            width: 28, height: 28, borderRadius: 7, background: ACCENT,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 800, fontSize: 13, color: '#fff',
-          }}>B</div>
-          <span style={{ color: '#e8e8e8', fontSize: 14, fontWeight: 700, letterSpacing: 0.2 }}>
-            Braq Connect
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <img
+            src="/logo.png"
+            alt="Braq Uni"
+            style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+          />
+          <div style={{ lineHeight: 1.2 }}>
+            <span style={{ color: '#e8e8e8', fontSize: 14, fontWeight: 700, letterSpacing: 0.2, display: 'block' }}>
+              Braq Connect
+            </span>
+            <span style={{ color: '#555', fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+              Uniform Specialists
+            </span>
+          </div>
         </div>
 
         {/* Spacer */}
@@ -104,6 +112,37 @@ export default function DashboardLayout() {
           overflowY: 'auto', overflowX: 'hidden',
           transition: 'width 0.2s ease', zIndex: 100,
         }}>
+          {/* Sidebar logo block */}
+          <div style={{
+            padding: collapsed ? '16px 0 12px' : '20px 16px 14px',
+            display: 'flex', alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            gap: 10,
+            borderBottom: '1px solid #1a1a1a',
+            flexShrink: 0,
+          }}>
+            <img
+              src="/logo.png"
+              alt="Braq Uni"
+              style={{
+                width: collapsed ? 36 : 44, height: collapsed ? 36 : 44,
+                borderRadius: '50%', objectFit: 'cover', flexShrink: 0,
+                border: `2px solid ${ACCENT}33`,
+                transition: 'width 0.2s, height 0.2s',
+              }}
+            />
+            {!collapsed && (
+              <div style={{ lineHeight: 1.3, overflow: 'hidden' }}>
+                <div style={{ color: '#e8e8e8', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>
+                  Braq Uni
+                </div>
+                <div style={{ color: '#555', fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                  Uniform Specialists
+                </div>
+              </div>
+            )}
+          </div>
+
           <nav style={{ flex: 1, paddingTop: 8, paddingBottom: 12 }}>
             {NAV.map((item, idx) => {
               if (item.divider) return (

@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config/index.js';
 import { logger } from './utils/logger.js';
 import { testConnection } from './db/pool.js';
+import { ensureSchema } from './db/ensureSchema.js';
 
 import { startReminderJob } from './jobs/reminder.job.js';
 
@@ -18,6 +19,8 @@ import { quotationsRouter }    from './routes/quotations.routes.js';
 import { ticketsRouter }       from './routes/tickets.routes.js';
 import { conversationsRouter } from './routes/conversations.routes.js';
 import { settingsRouter }      from './routes/settings.routes.js';
+import { analyticsRouter }    from './routes/analytics.routes.js';
+import { broadcastsRouter }   from './routes/broadcasts.routes.js';
 
 const app = express();
 
@@ -52,6 +55,8 @@ app.use('/api/quotations',     quotationsRouter);
 app.use('/api/tickets',        ticketsRouter);
 app.use('/api/conversations',  conversationsRouter);
 app.use('/api/settings',       settingsRouter);
+app.use('/api/analytics',      analyticsRouter);
+app.use('/api/broadcasts',     broadcastsRouter);
 
 app.get('/health', async (_req, res) => {
   res.json({ status: 'ok', service: 'Braq Connect API', env: config.env, timestamp: new Date().toISOString() });
@@ -67,6 +72,7 @@ app.use((err, _req, res, _next) => {
 async function start() {
   try {
     await testConnection();
+    await ensureSchema();
     app.listen(config.port, () => {
       logger.info(`Braq Connect API running`, {
         port: config.port,

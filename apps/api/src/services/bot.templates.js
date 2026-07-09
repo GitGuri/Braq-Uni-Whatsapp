@@ -17,8 +17,7 @@ export const TEMPLATES = {
     `5️⃣  Track my Order\n` +
     `6️⃣  Branding & Embroidery\n` +
     `7️⃣  Store Information\n` +
-    `8️⃣  Speak to a Consultant\n\n` +
-    `💡 You can also type *hours*, *branding*, *store*, *quote*, *order*, or *track* at any time.`,
+    `8️⃣  Speak to a Consultant`,
 
   RETAIL_MENU: () =>
     `Welcome to the Braq Uni Shop! 😊\n\n` +
@@ -39,8 +38,7 @@ export const TEMPLATES = {
     `4️⃣  Delivery schedule\n` +
     `5️⃣  Account queries\n` +
     `6️⃣  Speak to a consultant\n\n` +
-    `Reply *back* or *0* for the main menu.\n` +
-    `Type *quote* at any time to request a quotation.`,
+    `Reply *back* or *0* for the main menu.`,
 
   // ── BUSINESS HOURS / BUSY MODE ─────────────────────────────────────────────
 
@@ -371,63 +369,58 @@ export const TEMPLATES = {
   PAID_IN_FULL: () =>
     `✅ *Payment complete — thank you!* Your order is now fully paid.`,
 
-  // ── ORDER STAGE NOTIFICATIONS ──────────────────────────────────────────────
+  // ── ORDER STAGE NOTIFICATIONS (4 stages) ──────────────────────────────────
 
-  STAGE_1_QUOTATION_REQUESTED: ({ reference }) =>
-    `Thank you for your enquiry. 📋\n\n` +
-    `Your quotation request has been received and assigned to a consultant who will be in touch shortly.\n\n` +
-    `*Ref: ${reference}*`,
+  STAGE_DEPOSIT_PENDING: ({ reference, items = [], deposit }) => {
+    const lines = formatItemsSummary(items);
+    return (
+      `✅ *Order Received — Ref: ${reference}*\n\n` +
+      (lines ? `Your order:\n${lines}\n\n` : '') +
+      `💳 *60% Deposit required: R ${Number(deposit ?? 0).toFixed(2)}*\n\n` +
+      `A consultant will contact you shortly to arrange payment and kick off your production run.\n\n` +
+      `Reply *9* to speak to a consultant now.`
+    );
+  },
 
-  STAGE_2_QUOTATION_SUBMITTED: ({ reference }) =>
-    `Your quotation has been prepared and sent for your review. 📄\n\n` +
-    `Please contact us if you require any amendments.\n\n` +
-    `*Ref: ${reference}*`,
+  STAGE_IN_PRODUCTION: ({ reference, items = [], estimatedCompletion }) => {
+    const lines = formatItemsSummary(items);
+    return (
+      `🏭 *In Production — Ref: ${reference}*\n\n` +
+      `Your deposit has been received — your garments are now in production! 🎉\n\n` +
+      (lines ? `In production:\n${lines}\n\n` : '') +
+      (estimatedCompletion ? `📅 *Estimated completion: ${estimatedCompletion}*\n\n` : '') +
+      `We'll notify you as soon as your order is ready.\n\n` +
+      `Reply *9* to speak to a consultant.`
+    );
+  },
 
-  STAGE_3_PO_RECEIVED: ({ reference }) =>
-    `Thank you. ✅\n\n` +
-    `Your purchase order has been received and processing has commenced.\n\n` +
-    `We will keep you updated at every step.\n\n` +
-    `*Ref: ${reference}*`,
+  STAGE_READY_COLLECTION: ({ reference, items = [] }) => {
+    const lines = formatItemsSummary(items);
+    return (
+      `✅ *Ready for Collection — Ref: ${reference}*\n\n` +
+      `Your order has passed quality inspection and is ready for collection! 🎉\n\n` +
+      (lines ? lines + '\n\n' : '') +
+      `📍 *754B Voortrekker Road, Dalview, Brakpan, Gauteng*\n\n` +
+      `Please bring your order reference when collecting.\n\n` +
+      `Reply *9* if you need assistance.`
+    );
+  },
 
-  STAGE_4_MATERIALS: ({ reference }) =>
-    `Materials and trims are being allocated or sourced for your order. 🧵\n\n` +
-    `*Ref: ${reference}*`,
+  STAGE_READY_DELIVERY: ({ reference, items = [], trackingNumber }) => {
+    const lines = formatItemsSummary(items);
+    return (
+      `🚚 *Order Dispatched — Ref: ${reference}*\n\n` +
+      `Your order is on its way! 🎉\n\n` +
+      (lines ? lines + '\n\n' : '') +
+      (trackingNumber ? `📦 *Tracking number: ${trackingNumber}*\n\n` : '') +
+      `Reply *9* if you need assistance.`
+    );
+  },
 
-  STAGE_5_PRODUCTION_SCHEDULED: ({ reference, estimatedCompletion }) =>
-    `Your order has been scheduled for manufacturing. 📅\n\n` +
-    `*Estimated completion: ${estimatedCompletion || 'To be confirmed'}*\n\n` +
-    `*Ref: ${reference}*`,
-
-  STAGE_6_MANUFACTURING: ({ reference }) =>
-    `Your garments are currently in production. 🏭\n\n` +
-    `Our team is working to your approved specifications.\n\n` +
-    `*Ref: ${reference}*`,
-
-  STAGE_7_BRANDING: ({ reference }) =>
-    `Your garments are undergoing branding, embroidery, sublimation, or printing. 🎨\n\n` +
-    `*Ref: ${reference}*`,
-
-  STAGE_8_QC: ({ reference }) =>
-    `Your order is undergoing final quality inspection. 🔍\n\n` +
-    `*Ref: ${reference}*`,
-
-  STAGE_9_DISPATCH: ({ reference }) =>
-    `Your order is being packed and prepared for collection or delivery. 📦\n\n` +
-    `*Ref: ${reference}*`,
-
-  STAGE_10_COMPLETED_COLLECTION: ({ reference }) =>
-    `✅ *Good news!*\n\n` +
-    `Your order has been completed and is ready for collection.\n\n` +
-    `📍 *754B Voortrekker Road, Dalview, Brakpan, Gauteng*\n\n` +
-    `Please bring your reference number when collecting.\n` +
-    `*Ref: ${reference}*\n\n` +
-    `Thank you for choosing Braq Uni. 🙏`,
-
-  STAGE_10_COMPLETED_DELIVERY: ({ reference, trackingNumber }) =>
-    `✅ *Your order has been dispatched!*\n\n` +
-    (trackingNumber ? `*Tracking number: ${trackingNumber}*\n\n` : ``) +
-    `Should you need assistance, please contact our team.\n\n` +
-    `*Ref: ${reference}*\n\nThank you for choosing Braq Uni. 🙏`,
+  STAGE_COMPLETED: ({ reference }) =>
+    `✅ *Order Complete — Ref: ${reference}*\n\n` +
+    `Thank you for choosing Braq Uni! We hope you love your new uniforms. 🙏\n\n` +
+    `Reply *3* to request a new quotation | *0* for the main menu.`,
 
   // ── MISC NOTIFICATIONS ─────────────────────────────────────────────────────
 
@@ -477,36 +470,67 @@ export const TEMPLATES = {
     (estimatedCompletion ? `Estimated completion: *${estimatedCompletion}*\n\n` : ``) +
     (trackingNumber ? `Tracking number: *${trackingNumber}*\n\n` : ``) +
     `Reply *0* for the main menu or *9* to speak to a consultant.`,
+
+  // ── DIGITAL PROOF APPROVAL ─────────────────────────────────────────────────
+
+  PROOF_SENT: ({ reference, proofUrl, notes }) =>
+    `🎨 *Design Proof Ready — Ref: ${reference}*\n\n` +
+    (notes ? `${notes}\n\n` : '') +
+    `Please review your design proof:\n${proofUrl}\n\n` +
+    `*Reply:*\n` +
+    `✅ *approve* — I'm happy with this design\n` +
+    `✏️ *revise* — I need changes (please describe what to change)\n\n` +
+    `We'll hold production until you confirm.`,
+
+  PROOF_APPROVED: ({ reference }) =>
+    `✅ *Proof Approved — Ref: ${reference}*\n\n` +
+    `Thank you! Your design has been approved and we're moving into full production. 🎉\n\n` +
+    `We'll notify you when your order is ready.\n\n` +
+    `Reply *0* for the main menu or *9* to speak to a consultant.`,
+
+  PROOF_REVISION_REQUESTED: ({ reference }) =>
+    `✏️ *Revision Noted — Ref: ${reference}*\n\n` +
+    `Thank you for your feedback. Our design team will make the requested changes and send you an updated proof shortly.\n\n` +
+    `Reply *9* if you'd like to speak to a consultant directly.`,
+
+  PROOF_REVISION_ASK: ({ reference }) =>
+    `Please describe the changes you'd like made to the design for order *${reference}*.\n\n` +
+    `Reply *back* to cancel.`,
 };
+
+// ── Items summary formatter for stage notifications ───────────────────────────
+function formatItemsSummary(items = []) {
+  if (!Array.isArray(items) || !items.length) return '';
+  return items.map((i) => {
+    const name   = i.name ?? i.description ?? 'Item';
+    const colour = i.colour ? ` — ${i.colour}` : '';
+    const qty    = i.quantity ?? 0;
+    const activeSizes = Array.isArray(i.sizes)
+      ? i.sizes.filter((s) => s.size !== 'TBC' && s.qty > 0)
+      : [];
+    const sizeStr = activeSizes.length
+      ? '\n   ' + activeSizes.map((s) => `${s.size}×${s.qty}`).join('  ')
+      : '';
+    return `• ${name}${colour}  ×${qty}${sizeStr}`;
+  }).join('\n');
+}
 
 // ── Stage label helper ────────────────────────────────────────────────────────
 export function stageLabel(stage) {
   const labels = {
-    quotation_requested:   'Quotation requested',
-    quotation_submitted:   'Quotation submitted',
-    po_received:           'Purchase order received',
-    materials_procurement: 'Materials procurement',
-    production_scheduled:  'Production scheduled',
-    manufacturing:         'Manufacturing in progress',
-    branding_embroidery:   'Branding & embroidery',
-    quality_control:       'Quality control',
-    packing_dispatch:      'Packing & dispatch',
-    completed:             'Completed',
+    deposit_pending: 'Awaiting Deposit',
+    in_production:   'In Production',
+    ready:           'Ready / Dispatched',
+    completed:       'Completed',
   };
   return labels[stage] || stage;
 }
 
-// ── Stage index (1-based) ─────────────────────────────────────────────────────
+// ── 4-stage order pipeline ────────────────────────────────────────────────────
 export const STAGE_ORDER = [
-  'quotation_requested',
-  'quotation_submitted',
-  'po_received',
-  'materials_procurement',
-  'production_scheduled',
-  'manufacturing',
-  'branding_embroidery',
-  'quality_control',
-  'packing_dispatch',
+  'deposit_pending',
+  'in_production',
+  'ready',
   'completed',
 ];
 
@@ -519,16 +543,10 @@ export function nextStage(current) {
 // ── Map order stage → WhatsApp notification template key ──────────────────────
 export function templateForStage(stage) {
   const map = {
-    quotation_requested:   'STAGE_1_QUOTATION_REQUESTED',
-    quotation_submitted:   'STAGE_2_QUOTATION_SUBMITTED',
-    po_received:           'STAGE_3_PO_RECEIVED',
-    materials_procurement: 'STAGE_4_MATERIALS',
-    production_scheduled:  'STAGE_5_PRODUCTION_SCHEDULED',
-    manufacturing:         'STAGE_6_MANUFACTURING',
-    branding_embroidery:   'STAGE_7_BRANDING',
-    quality_control:       'STAGE_8_QC',
-    packing_dispatch:      'STAGE_9_DISPATCH',
-    completed:             'STAGE_10_COMPLETED_COLLECTION',
+    deposit_pending: 'STAGE_DEPOSIT_PENDING',
+    in_production:   'STAGE_IN_PRODUCTION',
+    ready:           'STAGE_READY_COLLECTION',
+    completed:       'STAGE_COMPLETED',
   };
   return map[stage] || null;
 }
