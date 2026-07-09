@@ -196,6 +196,24 @@ export const TEMPLATES = {
     );
   },
 
+  QUOTATION_AUTO_APPROVED: ({ reference }) =>
+    `🤖✅ *Instant Quotation Generated — Ref: ${reference}*\n\n` +
+    `All the items you requested are in our catalog, so we've prepared your quotation automatically!\n\n` +
+    `📄 Your PDF quotation has been sent to this WhatsApp.\n\n` +
+    `To confirm your order, reply *accept* or speak to a consultant.\n\n` +
+    `Reply *9* to speak to a consultant | *0* for the main menu.`,
+
+  QUOTE_ACCEPTED: ({ reference }) =>
+    `✅ *Quotation Accepted — Ref: ${reference}*\n\n` +
+    `Thank you! Your quotation has been accepted.\n\n` +
+    `A consultant will be in touch shortly to confirm production details and collect your *60% deposit* to kick off manufacturing.\n\n` +
+    `Reply *9* to speak to a consultant now | *0* for the main menu.`,
+
+  NO_PENDING_QUOTE: () =>
+    `Hmm, we couldn't find an open quotation to accept on your account. 🤔\n\n` +
+    `If you've already received a quotation PDF, please share the *reference number* (e.g. BRQ-Q-…) and we'll sort it out.\n\n` +
+    `Reply *3* to request a new quotation | *9* to speak to a consultant.`,
+
   // ── ORDER TRACKING ─────────────────────────────────────────────────────────
 
   ORDER_TRACKING_ASK: () =>

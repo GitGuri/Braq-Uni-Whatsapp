@@ -3,7 +3,7 @@ import { sendTextMessage } from './whatsapp.service.js';
 import { TEMPLATES } from './bot.templates.js';
 import { answerFaq, gatherQuotationInfo } from './ai.service.js';
 import { listProducts, listSchoolNames, listProductsBySchool } from './catalog.service.js';
-import { createFromFreeText } from './quotations.service.js';
+import { createFromFreeText, autoApproveQuotation, acceptQuotationByClient } from './quotations.service.js';
 import { createTicket } from './tickets.service.js';
 import { getOrCreateClientByWhatsapp, updateClientProfile } from './clients.service.js';
 import { isWithinBusinessHours } from '../utils/businessHours.js';
@@ -12,6 +12,7 @@ import {
   notifyNewQuotation,
   notifyNewTicket,
   notifyConsultantRequested,
+  notifyQuotationAccepted,
 } from './notification.service.js';
 
 // Fire-and-forget wrapper — notifications never block the bot response
@@ -107,6 +108,8 @@ function detectIntent(body) {
     return { type: 'keyword', value: 'store' };
   if (/wrong item|defective|faulty|damaged|broken|missing item|\bcomplaint\b/i.test(t))
     return { type: 'keyword', value: 'ticket' };
+  if (/^accept$|^i accept$|^yes.*accept|^accept.*quotation/i.test(t))
+    return { type: 'keyword', value: 'accept_quote' };
 
   return { type: 'freetext', value: body };
 }
@@ -223,6 +226,18 @@ async function handleQuotationGathering(body, convo, client, R) {
 
 async function finaliseQuotation(consolidatedText, convo, client, R) {
   const { quotation, unmatchedText } = await createFromFreeText(client.id, consolidatedText);
+
+  // Auto-approve instantly when every item matched the catalog — no consultant needed
+  const allCatalogMatched = !unmatchedText || unmatchedText.length === 0;
+  const hasItems = Array.isArray(quotation.line_items) && quotation.line_items.length > 0;
+
+  if (allCatalogMatched && hasItems) {
+    await autoApproveQuotation(quotation.id, quotation.line_items);
+    await updateState(convo.id, 'main_menu', { quotationHistory: null, quotationFollowups: 0 });
+    return R(TEMPLATES.QUOTATION_AUTO_APPROVED, { reference: quotation.reference });
+  }
+
+  // Unmatched custom items — send to consultant for pricing
   await updateState(convo.id, 'awaiting_consultant', { quotationHistory: null, quotationFollowups: 0 });
   notifyAsync(notifyNewQuotation, quotation, client);
   notifyAsync(notifyConsultantRequested, convo, client, 'Quotation enquiry');
@@ -338,6 +353,14 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     if (intent.value === 'ticket') {
       await updateState(convo.id, 'ticket_ask_category');
       return R(TEMPLATES.TICKET_ASK_CATEGORY);
+    }
+    if (intent.value === 'accept_quote') {
+      const accepted = await acceptQuotationByClient(client.id);
+      if (!accepted) {
+        return R(TEMPLATES.NO_PENDING_QUOTE);
+      }
+      notifyAsync(notifyQuotationAccepted, accepted, client);
+      return R(TEMPLATES.QUOTE_ACCEPTED, { reference: accepted.reference });
     }
   }
 

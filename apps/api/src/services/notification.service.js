@@ -120,7 +120,24 @@ Received: ${ts(conversation.created_at)}
   );
 }
 
-// ── 4. Reminder (unclaimed after 2 hours) ─────────────────────────────────────
+// ── 4. Quotation Accepted by Client ──────────────────────────────────────────
+export async function notifyQuotationAccepted(quotation, client) {
+  await send(
+    `🎉 Quotation Accepted — Ref ${quotation.reference}`,
+    `A client has accepted their quotation via WhatsApp!
+
+Client: ${client.name ?? 'Unknown'} (${client.client_type ?? 'unknown'})
+WhatsApp: ${client.whatsapp_number ?? '—'}
+Total: R ${Number(quotation.total ?? 0).toFixed(2)} (incl. VAT)
+Accepted: ${ts(new Date())}
+
+Next step: collect the 60% deposit and convert to a production order.
+
+👉 View quotation: ${config.dashboardBaseUrl}/quotations/${quotation.id}/build`
+  );
+}
+
+// ── 5. Reminder (unclaimed after 2 hours) ─────────────────────────────────────
 export async function sendReminder(item, type) {
   const TYPE_LABELS = { quotation: 'Quotation', ticket: 'Ticket', conversation: 'Consultant Request' };
   const link = type === 'quotation'

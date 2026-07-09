@@ -92,16 +92,16 @@ export async function gatherQuotationInfo(history, { products }) {
   const system =
     `You are a quotation assistant for Braq Uni, a uniform manufacturer.\n` +
     `Review the conversation below and decide if you have enough information to generate a quotation.\n\n` +
-    `A complete quotation needs:\n` +
+    `A complete quotation needs ALL of the following:\n` +
     `• Item types (e.g. polo shirts, hoodies, jackets) and quantities\n` +
-    `• Sizes (e.g. S/M/L/XL, age ranges) — at least "TBC" is acceptable\n` +
-    `• Branding (logo, embroidery, print, or none) — at least "TBC" is acceptable\n\n` +
-    `Colors are optional — do NOT block on missing colors.\n` +
+    `• Colour(s) required — ask if not mentioned (e.g. "Navy Blue", "Black/Red")\n` +
+    `• Sizes needed (e.g. S×10, M×20, L×15) — ask if not mentioned; "TBC" is acceptable\n` +
+    `• Branding (logo type, embroidery, print, or none) — at least "TBC" is acceptable\n\n` +
+    `Ask about colour and sizes if the customer has not mentioned them.\n` +
     `Do NOT block if sizes or branding is "TBC" — that is enough to proceed.\n\n` +
-    `If you genuinely cannot determine what garment types or quantities are needed, ` +
-    `set status to "need_more_info" and ask ONE short, friendly question.\n` +
+    `If any key information is missing, set status to "need_more_info" and ask ONE short, friendly question.\n` +
     `Otherwise set status to "ready" and write a clean "consolidatedRequest" that lists ` +
-    `ONLY the actual product items with their quantities and sizes. ` +
+    `the product items with quantities, colours, and sizes. ` +
     `Do NOT include greetings, filler words, or conversational phrases in consolidatedRequest.\n\n` +
     `Available product catalog:\n` +
     products.map(p => `${p.id} | ${p.name} | ${p.category} | sizes: ${JSON.stringify(p.sizes)}`).join('\n');

@@ -183,6 +183,57 @@ export async function approveQuotation(id, lineItems, staffId) {
   return { quotation, whatsappSent };
 }
 
+// ── AI auto-approve when all items are catalog-matched ────────────────────────
+export async function autoApproveQuotation(id, lineItems) {
+  const existing = await getQuotationById(id);
+  if (existing.status !== 'draft') return null;
+
+  const confirmedItems = lineItems.map((item) => ({ ...item, priceConfirmed: true }));
+  const { subtotal, vatAmount, total } = calcTotals(confirmedItems);
+
+  const { rows } = await query(
+    `UPDATE quotations
+     SET status      = 'sent',
+         line_items  = $1,
+         subtotal    = $2,
+         vat         = $3,
+         total       = $4,
+         auto_quoted = true,
+         updated_at  = NOW()
+     WHERE id = $5
+     RETURNING *`,
+    [JSON.stringify(confirmedItems), subtotal, vatAmount, total, id]
+  );
+  const quotation = rows[0];
+
+  if (existing.client_wa) {
+    try {
+      const pdfDoc    = renderQuotationPdf(quotation, {
+        name:             existing.client_name,
+        organisation:     existing.client_org,
+        whatsapp_number:  existing.client_wa,
+        physical_address: existing.client_address,
+      });
+      const pdfBuffer = await pdfToBuffer(pdfDoc);
+      const mediaId   = await uploadMedia(pdfBuffer, `${quotation.reference}.pdf`);
+      await sendDocument(existing.client_wa, {
+        mediaId,
+        filename: `${quotation.reference}.pdf`,
+        caption:
+          `✅ Your quotation is ready! 📄\n\n` +
+          `*Ref: ${quotation.reference}*\n` +
+          `*Total: R ${Number(total).toFixed(2)} (incl. VAT)*\n\n` +
+          `Reply *accept* to confirm, or *9* to speak to a consultant.\n` +
+          `Valid for 30 days.`,
+      });
+    } catch (err) {
+      logger.error('Failed to send auto-quoted PDF via WhatsApp', { quotationId: id, error: err.message });
+    }
+  }
+
+  return quotation;
+}
+
 // ── List quotations ───────────────────────────────────────────────────────────
 export async function listQuotations({ status } = {}) {
   const params = [];
@@ -215,9 +266,11 @@ export async function getQuotationById(id) {
             c.organisation     AS client_org,
             c.whatsapp_number  AS client_wa,
             c.physical_address AS client_address,
-            c.client_type
+            c.client_type,
+            o.id               AS order_id
      FROM quotations q
      LEFT JOIN clients c ON c.id = q.client_id
+     LEFT JOIN orders o  ON o.quotation_id = q.id
      WHERE q.id = $1`,
     [id]
   );
@@ -234,6 +287,22 @@ export async function updateQuotationStatus(id, status) {
   );
   if (!rows.length) throw new HttpError(404, 'Quotation not found');
   return rows[0];
+}
+
+export async function acceptQuotationByClient(clientId) {
+  const { rows } = await query(
+    `UPDATE quotations
+     SET status = 'accepted', updated_at = NOW()
+     WHERE id = (
+       SELECT id FROM quotations
+       WHERE client_id = $1 AND status = 'sent'
+       ORDER BY updated_at DESC
+       LIMIT 1
+     )
+     RETURNING *`,
+    [clientId]
+  );
+  return rows[0] || null;
 }
 
 export async function getQuotationByReference(reference, clientId) {
