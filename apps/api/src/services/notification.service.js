@@ -16,19 +16,52 @@ async function getActiveConsultants() {
 async function send(subject, text) {
   const consultants = await getActiveConsultants();
   if (!consultants.length) {
-    logger.warn('notification.service: no active consultants, email skipped');
+    logger.warn('notification.service: no active consultants found in DB — email skipped');
     return;
   }
-  const to = consultants.map((c) => c.email);
-  logger.info('Sending consultant email', { from: config.resend.fromEmail, to, subject });
+
+  let to = consultants.map((c) => c.email).filter(Boolean);
+  if (!to.length) {
+    logger.warn('notification.service: active consultants have no email addresses set — email skipped', {
+      consultants: consultants.map((c) => c.name),
+    });
+    return;
+  }
+
+  // Allow a single override email (for testing before braquni.com is verified on Resend)
+  if (config.resend.overrideEmail) {
+    logger.info('notification.service: NOTIFICATION_OVERRIDE_EMAIL set — routing all notifications to override address');
+    to = [config.resend.overrideEmail];
+  }
+
+  const fromEmail = config.resend.fromEmail;
+
+  // Warn when using Resend's shared test address — only delivers to the account owner
+  if (fromEmail === 'onboarding@resend.dev') {
+    logger.warn(
+      'notification.service: FROM_EMAIL is still onboarding@resend.dev — ' +
+      'Resend only delivers from this address to your Resend account owner email. ' +
+      'Set NOTIFICATION_OVERRIDE_EMAIL=your@email.com to receive notifications now, ' +
+      'or verify braquni.com at resend.com/domains and set FROM_EMAIL=notifications@braquni.com.'
+    );
+  }
+
+  logger.info('Sending consultant email', { from: fromEmail, to, subject });
   const { data, error } = await resend.emails.send({
-    from: `Braq Connect <${config.resend.fromEmail}>`,
+    from:    `Braq Connect <${fromEmail}>`,
     to,
     subject,
     text,
   });
   if (error) {
-    logger.error('Resend rejected email', { error, to, from: config.resend.fromEmail });
+    logger.error('Resend rejected email', {
+      error,
+      to,
+      from: fromEmail,
+      hint: fromEmail === 'onboarding@resend.dev'
+        ? 'Using test sender — verify braquni.com at resend.com/domains'
+        : 'Check RESEND_API_KEY and domain verification',
+    });
     throw new Error(`Resend error: ${JSON.stringify(error)}`);
   }
   logger.info('Consultant notification sent', { subject, recipients: to.length, messageId: data?.id });
@@ -137,7 +170,24 @@ Next step: collect the 60% deposit and convert to a production order.
   );
 }
 
-// ── 5. Reminder (unclaimed after 2 hours) ─────────────────────────────────────
+// ── 5. New WhatsApp Order ─────────────────────────────────────────────────────
+export async function notifyNewOrder(order, client) {
+  await send(
+    `🛒 New WhatsApp Order — Ref ${order.reference}`,
+    `A customer has placed an order directly via WhatsApp and needs a consultant assigned.
+
+Client: ${client.name ?? 'Unknown'} (${client.client_type ?? 'unknown'})
+WhatsApp: ${client.whatsapp_number ?? '—'}
+Deposit due (60%): R ${Number(order.deposit_amount ?? 0).toFixed(2)}
+Received: ${ts(order.created_at)}
+
+Next step: collect the 60% deposit to begin production.
+
+👉 View & assign: ${config.dashboardBaseUrl}/orders/${order.id}`
+  );
+}
+
+// ── 6. Reminder (unclaimed after 2 hours) ─────────────────────────────────────
 export async function sendReminder(item, type) {
   const TYPE_LABELS = { quotation: 'Quotation', ticket: 'Ticket', conversation: 'Consultant Request' };
   const link = type === 'quotation'

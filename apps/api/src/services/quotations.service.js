@@ -57,19 +57,21 @@ export async function createFromFreeText(clientId, freeText) {
     }
     const quantity  = item.quantity;
     const unitPrice = Number(product.price);
+    const sizes     = Array.isArray(item.sizes) && item.sizes.length > 0
+      ? item.sizes
+      : [{ size: 'TBC', qty: quantity }];
     lineItems.push({
       productId:          product.id,
       name:               product.name,
       category:           product.category,
-      colour:             '',
-      sizes:              [],
+      colour:             item.colour || '',
+      sizes,
       quantity,
       unitPrice,
       brandingSurcharge:  0,
       effectiveUnitPrice: unitPrice,
       branding:           { type: 'none', position: '', detail: '' },
       lineTotal:          unitPrice * quantity,
-      aiNote:             item.sizes ? `Sizes in request: ${item.sizes}` : null,
       priceConfirmed:     true,
     });
   }

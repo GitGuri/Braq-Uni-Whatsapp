@@ -113,9 +113,8 @@ export async function convertFromQuotation(quotationId, staffId, { poNumber, ass
 
   const reference = await nextOrderRef();
 
-  // Derive 50% deposit by default (consultant can adjust on the order detail page)
   const total        = Number(quotation.total);
-  const depositAmt   = parseFloat((total * 0.5).toFixed(2));
+  const depositAmt   = parseFloat((total * 0.60).toFixed(2));
   const balanceAmt   = parseFloat((total - depositAmt).toFixed(2));
 
   const { rows } = await query(
@@ -135,6 +134,7 @@ export async function convertFromQuotation(quotationId, staffId, { poNumber, ass
       balanceAmt,
     ]
   );
+
   const order = rows[0];
 
   // Notify client
@@ -267,6 +267,34 @@ export async function listPayments(orderId) {
     [orderId]
   );
   return rows;
+}
+
+// ── Create an order placed by the WhatsApp bot ───────────────────────────────
+export async function createOrderFromBot(clientId, { lineItems = [], quotationId = null } = {}) {
+  const subtotal   = lineItems.reduce((sum, i) => sum + Number(i.lineTotal), 0);
+  const vatAmount  = parseFloat((subtotal * 0.15).toFixed(2));
+  const total      = parseFloat((subtotal + vatAmount).toFixed(2));
+  const depositAmt = parseFloat((total * 0.60).toFixed(2));
+  const balanceAmt = parseFloat((total - depositAmt).toFixed(2));
+  const reference  = await nextOrderRef();
+
+  const { rows } = await query(
+    `INSERT INTO orders
+       (reference, client_id, client_type, quotation_id, stage,
+        payment_status, deposit_amount, balance_amount)
+     VALUES ($1,$2,'corporate',$3,'quotation_requested','unpaid',$4,$5)
+     RETURNING *`,
+    [reference, clientId, quotationId, depositAmt, balanceAmt]
+  );
+
+  if (quotationId) {
+    await query(
+      `UPDATE quotations SET status = 'accepted', updated_at = NOW() WHERE id = $1 AND status IN ('sent','draft')`,
+      [quotationId]
+    );
+  }
+
+  return rows[0];
 }
 
 // ── Stage label helper (for dashboard/tracking) ───────────────────────────────

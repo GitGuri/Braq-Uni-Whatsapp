@@ -64,7 +64,18 @@ const QUOTATION_SCHEMA = {
           productId:   { type: 'STRING' },
           quantity:    { type: 'INTEGER' },
           description: { type: 'STRING' },
-          sizes:       { type: 'STRING' },
+          colour:      { type: 'STRING' },
+          sizes: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                size: { type: 'STRING' },
+                qty:  { type: 'INTEGER' },
+              },
+              required: ['size', 'qty'],
+            },
+          },
         },
         required: ['productId', 'quantity'],
       },
@@ -197,14 +208,15 @@ export async function parseQuotationRequest(freeText, { products }) {
     `You extract a quotation request into structured line items for Braq Uni, a uniform manufacturer.\n\n` +
     `RULES:\n` +
     `1. Match each GARMENT TYPE the customer describes to the closest product in the catalog by its id.\n` +
-    `2. Extract the requested quantity.\n` +
-    `3. Size/colour descriptors (e.g. "medium", "large", "black", "M/L/XL") are ATTRIBUTES of an item — ` +
-    `store them in the "sizes" field and NEVER put them in unmatchedText as standalone entries.\n` +
-    `4. unmatchedText is ONLY for garment types that cannot be matched to any catalog product ` +
-    `(e.g. "safety boots", "swim caps"). Each entry must be a full item description, never a bare word.\n` +
-    `5. Completely ignore conversational noise — greetings ("hello", "hi", "ok", "yes", "thanks") ` +
-    `and filler words are NOT items. Do not include them anywhere in the response.\n` +
-    `6. If the input contains no recognisable product descriptions, return empty arrays.\n\n` +
+    `2. Extract the requested total quantity for the item.\n` +
+    `3. Extract the colour mentioned (e.g. "Navy Blue", "Black/Red") into the "colour" field. If multiple colours, join with "/".\n` +
+    `4. Extract sizes into a structured "sizes" array — each entry has "size" (e.g. "S", "M", "L", "XL", "2XL", "6", "8") ` +
+    `and "qty" (integer). If the customer says e.g. "S×10 M×20" parse each. If only total qty with no breakdown, ` +
+    `use one entry with size "TBC" and the full quantity.\n` +
+    `5. unmatchedText is ONLY for garment types that cannot be matched to any catalog product ` +
+    `(e.g. "safety boots", "swim caps"). Each entry must be a full item description, never a bare word or size.\n` +
+    `6. Completely ignore conversational noise — greetings, filler words are NOT items.\n` +
+    `7. If the input contains no recognisable product descriptions, return empty arrays.\n\n` +
     `Product catalog (id | name | category | sizes):\n` +
     products.map(p => `${p.id} | ${p.name} | ${p.category} | ${JSON.stringify(p.sizes)}`).join('\n');
 

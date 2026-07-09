@@ -3,14 +3,15 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Row, Col, Card, Button, Input, InputNumber, Select, Typography,
-  Space, Tag, Divider, Alert, Spin, Tooltip, message, AutoComplete,
+  Space, Tag, Divider, Alert, Spin, Tooltip, message, AutoComplete, Modal, Form,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, ArrowLeftOutlined, CheckOutlined,
-  UserOutlined, PhoneOutlined, MessageOutlined,
+  UserOutlined, PhoneOutlined, MessageOutlined, SwapOutlined, FilePdfOutlined,
 } from '@ant-design/icons'
 import { getQuotation, approveQuotation, claimQuotation } from '../../api/quotations.js'
 import { listProducts } from '../../api/products.js'
+import { convertFromQuotation } from '../../api/orders.js'
 
 const { Text, Title } = Typography
 
@@ -92,9 +93,11 @@ export default function QuotationBuilder() {
   const { id }   = useParams()
   const navigate = useNavigate()
   const qc       = useQueryClient()
-  const [items, setItems]           = useState([])
-  const [custInputs, setCustInputs] = useState({})
-  const [msgApi, ctx]               = message.useMessage()
+  const [items, setItems]             = useState([])
+  const [custInputs, setCustInputs]   = useState({})
+  const [convertModal, setConvertModal] = useState(false)
+  const [convertForm]                 = Form.useForm()
+  const [msgApi, ctx]                 = message.useMessage()
 
   const { data: qData, isLoading } = useQuery({
     queryKey: ['quotation', id],
@@ -130,6 +133,17 @@ export default function QuotationBuilder() {
       navigate('/quotations')
     },
     onError: (err) => msgApi.error(err.response?.data?.error ?? 'Approval failed'),
+  })
+
+  const convertMut = useMutation({
+    mutationFn: (vals) => convertFromQuotation(id, vals),
+    onSuccess: (res) => {
+      msgApi.success(`Order ${res.order.reference} created`)
+      setConvertModal(false)
+      qc.invalidateQueries({ queryKey: ['quotations'] })
+      navigate(`/orders/${res.order.id}`)
+    },
+    onError: (err) => msgApi.error(err.response?.data?.error ?? 'Conversion failed'),
   })
 
   function updateItem(idx, patch) {
@@ -188,9 +202,11 @@ export default function QuotationBuilder() {
   const total    = subtotal + vat
   const deposit  = total * 0.60
 
-  const quot     = qData?.quotation
-  const isDraft  = quot?.status === 'draft'
-  const products = pData?.products ?? []
+  const quot       = qData?.quotation
+  const isDraft    = quot?.status === 'draft'
+  const isAccepted = quot?.status === 'accepted'
+  const hasOrder   = !!quot?.order_id
+  const products   = pData?.products ?? []
 
   const canApprove = derived.length > 0 && derived.every(i => i.name.trim())
 
@@ -208,26 +224,70 @@ export default function QuotationBuilder() {
       {ctx}
 
       {/* Top bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/quotations')}>Quotations</Button>
           <Title level={4} style={{ margin: 0 }}>{quot.reference}</Title>
-          <Tag color={isDraft ? 'orange' : 'blue'}>{quot.status}</Tag>
+          <Tag color={
+            quot.status === 'draft' ? 'orange' : quot.status === 'sent' ? 'blue' :
+            quot.status === 'accepted' ? 'green' : 'red'
+          }>{quot.status}</Tag>
+          {quot.auto_quoted && (
+            <Tag color="purple">AI Auto-Quoted</Tag>
+          )}
         </Space>
-        <Tooltip title={!isDraft ? 'Already approved' : !canApprove ? 'All items need a name' : ''}>
-          <Button
-            type="primary"
-            size="large"
-            icon={<CheckOutlined />}
-            loading={approveMut.isPending}
-            disabled={!canApprove || !isDraft}
-            onClick={() => approveMut.mutate()}
-            style={{ background: '#c0392b', borderColor: '#c0392b', minWidth: 180 }}
-          >
-            Approve &amp; Send PDF
-          </Button>
-        </Tooltip>
+        <Space>
+          {!isDraft && (
+            <Button
+              icon={<FilePdfOutlined />}
+              onClick={() => window.open(`/api/quotations/${id}/pdf`, '_blank')}
+            >
+              View PDF
+            </Button>
+          )}
+          {isAccepted && !hasOrder && (
+            <Button
+              icon={<SwapOutlined />}
+              onClick={() => { convertForm.resetFields(); setConvertModal(true) }}
+            >
+              Convert to Order
+            </Button>
+          )}
+          {hasOrder && (
+            <Button type="default" onClick={() => navigate(`/orders/${quot.order_id}`)}>
+              View Order →
+            </Button>
+          )}
+          {isDraft && (
+            <Tooltip title={!canApprove ? 'All items need a name' : ''}>
+              <Button
+                type="primary"
+                size="large"
+                icon={<CheckOutlined />}
+                loading={approveMut.isPending}
+                disabled={!canApprove}
+                onClick={() => approveMut.mutate()}
+                style={{ background: '#c0392b', borderColor: '#c0392b', minWidth: 180 }}
+              >
+                Approve &amp; Send PDF
+              </Button>
+            </Tooltip>
+          )}
+        </Space>
       </div>
+
+      {!isDraft && (
+        <Alert
+          type={isAccepted ? 'success' : quot.status === 'sent' ? 'info' : 'error'}
+          message={
+            isAccepted ? 'Customer accepted this quotation.' :
+            quot.status === 'sent' ? 'Quotation sent to customer — awaiting their response.' :
+            'Customer rejected this quotation.'
+          }
+          style={{ marginBottom: 16 }}
+          showIcon
+        />
+      )}
 
       <Row gutter={16} align="top">
         {/* Left: context panel */}
@@ -518,6 +578,26 @@ export default function QuotationBuilder() {
           </Card>
         </Col>
       </Row>
+
+      {/* Convert to Order Modal */}
+      <Modal
+        title="Convert to Order"
+        open={convertModal}
+        onCancel={() => setConvertModal(false)}
+        onOk={() => convertMut.mutate(convertForm.getFieldsValue())}
+        okText="Create Order"
+        okButtonProps={{ loading: convertMut.isPending }}
+      >
+        <Form form={convertForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item label="PO Number (optional)" name="poNumber">
+            <Input placeholder="Client's purchase order reference" />
+          </Form.Item>
+        </Form>
+        <Text type="secondary" style={{ fontSize: 13 }}>
+          An order will be created with a <strong>60% deposit</strong> pre-calculated from the
+          quotation total of <strong>R {total.toFixed(2)}</strong>.
+        </Text>
+      </Modal>
     </>
   )
 }

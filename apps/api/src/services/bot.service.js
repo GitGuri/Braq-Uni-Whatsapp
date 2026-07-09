@@ -1,9 +1,10 @@
 import { query } from '../db/pool.js';
 import { sendTextMessage } from './whatsapp.service.js';
 import { TEMPLATES } from './bot.templates.js';
-import { answerFaq, gatherQuotationInfo } from './ai.service.js';
+import { answerFaq, gatherQuotationInfo, parseQuotationRequest } from './ai.service.js';
 import { listProducts, listSchoolNames, listProductsBySchool } from './catalog.service.js';
-import { createFromFreeText, autoApproveQuotation, acceptQuotationByClient } from './quotations.service.js';
+import { createFromFreeText, autoApproveQuotation, acceptQuotationByClient, getQuotationByReference } from './quotations.service.js';
+import { createOrderFromBot } from './orders.service.js';
 import { createTicket } from './tickets.service.js';
 import { getOrCreateClientByWhatsapp, updateClientProfile } from './clients.service.js';
 import { isWithinBusinessHours } from '../utils/businessHours.js';
@@ -13,6 +14,7 @@ import {
   notifyNewTicket,
   notifyConsultantRequested,
   notifyQuotationAccepted,
+  notifyNewOrder,
 } from './notification.service.js';
 
 // Fire-and-forget wrapper — notifications never block the bot response
@@ -54,6 +56,11 @@ const PARENT_STATE = {
   corporate_delivery_ask:     'corporate_menu',
   corporate_account_query:    'corporate_menu',
   quotation_ask_description:  'main_menu',
+  order_ask_method:           'main_menu',
+  order_ask_reference:        'order_ask_method',
+  order_gathering:            'order_ask_method',
+  order_confirm_quote:        'main_menu',
+  order_confirm_direct:       'main_menu',
   order_tracking_ask:         'main_menu',
   ticket_ask_category:        'main_menu',
   ticket_ask_description:     'ticket_ask_category',
@@ -70,6 +77,7 @@ const PARENT_TEMPLATE = {
 const DATA_COLLECTION_STATES = new Set([
   'quotation_ask_description',
   'quotation_gathering',
+  'order_gathering',
   'ticket_ask_description',
   'corporate_account_query',
   'registration_name',
@@ -93,7 +101,7 @@ function detectIntent(body) {
   if (t === '9' || /^(speak to|talk to|connect me to|i need a) consultant/i.test(t))
     return { type: 'consultant' };
 
-  if (/^[1-7]$/.test(t)) return { type: 'menu', value: parseInt(t) };
+  if (/^[1-8]$/.test(t)) return { type: 'menu', value: parseInt(t) };
 
   // Order reference: BRQ-O-YYYYMMDD-XXXX or BRQ-Q-YYYYMMDD-XXXX
   if (/^brq-[oq]-\d{8}-\d{4}$/i.test(t)) return { type: 'order_ref', value: t.toUpperCase() };
@@ -110,6 +118,8 @@ function detectIntent(body) {
     return { type: 'keyword', value: 'ticket' };
   if (/^accept$|^i accept$|^yes.*accept|^accept.*quotation/i.test(t))
     return { type: 'keyword', value: 'accept_quote' };
+  if (/^(make|place|new)\s*(an?\s*)?order$/i.test(t))
+    return { type: 'keyword', value: 'make_order' };
 
   return { type: 'freetext', value: body };
 }
@@ -234,7 +244,8 @@ async function finaliseQuotation(consolidatedText, convo, client, R) {
   if (allCatalogMatched && hasItems) {
     await autoApproveQuotation(quotation.id, quotation.line_items);
     await updateState(convo.id, 'main_menu', { quotationHistory: null, quotationFollowups: 0 });
-    return R(TEMPLATES.QUOTATION_AUTO_APPROVED, { reference: quotation.reference });
+    // PDF already sent via WhatsApp by autoApproveQuotation — no extra text needed
+    return;
   }
 
   // Unmatched custom items — send to consultant for pricing
@@ -318,9 +329,17 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     return R(TEMPLATES.AWAITING_CONSULTANT);
   }
 
-  // Order reference typed in any state → show tracking result
+  // Order/quotation reference typed — route based on state and ref type
   if (intent.type === 'order_ref') {
-    const order = await findOrder(intent.value, client.id);
+    const ref = intent.value;
+
+    // BRQ-Q ref typed while waiting for a quotation ref → look up the quote
+    if (ref.startsWith('BRQ-Q-') && state === 'order_ask_reference') {
+      return handleOrderQuoteRefLookup(ref, convo, client, R);
+    }
+
+    // Everything else → order tracking
+    const order = await findOrder(ref, client.id);
     if (!order) return R(TEMPLATES.ORDER_NOT_FOUND);
     const estimatedDate = order.estimated_completion_date
       ? new Date(order.estimated_completion_date).toLocaleDateString('en-ZA')
@@ -361,6 +380,12 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
       }
       notifyAsync(notifyQuotationAccepted, accepted, client);
       return R(TEMPLATES.QUOTE_ACCEPTED, { reference: accepted.reference });
+    }
+    if (intent.value === 'make_order') {
+      return gateOrProceed(client, convo, 'order_ask_method', R, async () => {
+        await updateState(convo.id, 'order_ask_method');
+        return R(TEMPLATES.ORDER_ASK_METHOD);
+      });
     }
   }
 
@@ -456,6 +481,80 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
     case 'quotation_gathering':
       return handleQuotationGathering(body, convo, client, R);
 
+    case 'order_ask_method': {
+      if (intent.type === 'menu' && intent.value === 1) {
+        await updateState(convo.id, 'order_ask_reference');
+        return R(TEMPLATES.ORDER_ASK_REFERENCE);
+      }
+      if (intent.type === 'menu' && intent.value === 2) {
+        await updateState(convo.id, 'order_gathering', { orderHistory: [], orderFollowups: 0 });
+        return R(TEMPLATES.ORDER_ASK_ITEMS, { name: client.name });
+      }
+      return R(TEMPLATES.ORDER_ASK_METHOD);
+    }
+
+    case 'order_ask_reference':
+      // BRQ-Q ref typed → intercepted globally above; anything else → reprompt
+      return R(TEMPLATES.ORDER_ASK_REFERENCE);
+
+    case 'order_gathering':
+      return handleOrderGathering(body, convo, client, R);
+
+    case 'order_confirm_quote': {
+      if (intent.type === 'menu' && intent.value === 1) {
+        const quotationId = convo.context.pendingQuotationId;
+        if (!quotationId) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+        const { rows: qRows } = await query('SELECT * FROM quotations WHERE id = $1', [quotationId]);
+        if (!qRows.length) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+        const lineItems = Array.isArray(qRows[0].line_items) ? qRows[0].line_items : [];
+        const order = await createOrderFromBot(client.id, { lineItems, quotationId });
+        await updateState(convo.id, 'main_menu', { pendingQuotationId: null });
+        notifyAsync(notifyNewOrder, order, client);
+        return R(TEMPLATES.ORDER_CREATED, { reference: order.reference, deposit: Number(order.deposit_amount) });
+      }
+      if (intent.type === 'menu' && intent.value === 2) {
+        await updateState(convo.id, 'main_menu');
+        return R(TEMPLATES.MAIN_MENU);
+      }
+      // Re-show confirm — re-fetch from context
+      const qId = convo.context.pendingQuotationId;
+      if (!qId) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+      const { rows: reRows } = await query('SELECT * FROM quotations WHERE id = $1', [qId]);
+      if (!reRows.length) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+      const rq = reRows[0];
+      const rItems = Array.isArray(rq.line_items) ? rq.line_items : [];
+      return R(TEMPLATES.ORDER_CONFIRM_QUOTE, {
+        reference: rq.reference,
+        items: rItems,
+        subtotal: Number(rq.subtotal),
+        vat: Number(rq.vat),
+        total: Number(rq.total),
+        deposit: parseFloat((Number(rq.total) * 0.60).toFixed(2)),
+      });
+    }
+
+    case 'order_confirm_direct': {
+      if (intent.type === 'menu' && intent.value === 1) {
+        const lineItems = convo.context.pendingOrderItems || [];
+        if (!lineItems.length) { await updateState(convo.id, 'main_menu'); return R(TEMPLATES.MAIN_MENU); }
+        const order = await createOrderFromBot(client.id, { lineItems });
+        await updateState(convo.id, 'main_menu', { pendingOrderItems: null });
+        notifyAsync(notifyNewOrder, order, client);
+        return R(TEMPLATES.ORDER_CREATED, { reference: order.reference, deposit: Number(order.deposit_amount) });
+      }
+      if (intent.type === 'menu' && intent.value === 2) {
+        await updateState(convo.id, 'main_menu');
+        return R(TEMPLATES.MAIN_MENU);
+      }
+      // Re-show confirm
+      const pendingItems = convo.context.pendingOrderItems || [];
+      const sub  = parseFloat(pendingItems.reduce((s, i) => s + Number(i.lineTotal), 0).toFixed(2));
+      const vat  = parseFloat((sub * 0.15).toFixed(2));
+      const tot  = parseFloat((sub + vat).toFixed(2));
+      const dep  = parseFloat((tot * 0.60).toFixed(2));
+      return R(TEMPLATES.ORDER_CONFIRM_DIRECT, { items: pendingItems, subtotal: sub, vat, total: tot, deposit: dep });
+    }
+
     case 'ticket_ask_category': {
       const categoryMap = { '1': 'wrong_item', '2': 'defective', '3': 'missing_item', '4': 'other' };
       const category = categoryMap[body.trim()] || null;
@@ -512,6 +611,10 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
         await updateState(convo.id, 'corporate_menu');
         return R(TEMPLATES.CORPORATE_MENU);
       }
+      if (pendingIntent === 'order_ask_method') {
+        await updateState(convo.id, 'order_ask_method');
+        return R(TEMPLATES.ORDER_ASK_METHOD);
+      }
       await updateState(convo.id, 'main_menu');
       return R(TEMPLATES.MAIN_MENU);
     }
@@ -522,7 +625,117 @@ export async function handleInbound({ phoneNumber, metaMessageId, body }) {
   }
 }
 
-// ── Main menu handler (7 options) ─────────────────────────────────────────────
+// ── Order: look up a quotation ref and show confirmation ─────────────────────
+async function handleOrderQuoteRefLookup(reference, convo, client, R) {
+  const quotation = await getQuotationByReference(reference, client.id);
+  if (!quotation) return R(TEMPLATES.ORDER_QUOTE_NOT_FOUND);
+
+  if (!['sent', 'accepted'].includes(quotation.status)) {
+    return R(TEMPLATES.ORDER_QUOTE_NOT_READY, { status: quotation.status });
+  }
+
+  const items    = Array.isArray(quotation.line_items) ? quotation.line_items : [];
+  const subtotal = Number(quotation.subtotal);
+  const vat      = Number(quotation.vat);
+  const total    = Number(quotation.total);
+  const deposit  = parseFloat((total * 0.60).toFixed(2));
+
+  await updateState(convo.id, 'order_confirm_quote', { pendingQuotationId: quotation.id });
+  return R(TEMPLATES.ORDER_CONFIRM_QUOTE, { reference: quotation.reference, items, subtotal, vat, total, deposit });
+}
+
+// ── Order: multi-turn gathering for direct catalog orders ─────────────────────
+async function handleOrderGathering(body, convo, client, R) {
+  const history        = [...(convo.context.orderHistory || [])];
+  history.push({ role: 'client', text: body });
+
+  const followupsAsked = convo.context.orderFollowups || 0;
+  const MAX_FOLLOWUPS  = 5;
+  const products       = await listProducts({});
+
+  if (followupsAsked < MAX_FOLLOWUPS) {
+    const result = await gatherQuotationInfo(history, { products });
+
+    if (result.status === 'need_more_info' && result.question) {
+      history.push({ role: 'bot', text: result.question });
+      await updateState(convo.id, 'order_gathering', {
+        orderHistory:   history,
+        orderFollowups: followupsAsked + 1,
+      });
+      return R(() => result.question);
+    }
+
+    const consolidated = result.consolidatedRequest
+      || history.filter((h) => h.role === 'client').map((h) => h.text).join('\n');
+    return finaliseDirectOrder(consolidated, convo, client, R);
+  }
+
+  const consolidated = history.filter((h) => h.role === 'client').map((h) => h.text).join('\n');
+  return finaliseDirectOrder(consolidated, convo, client, R);
+}
+
+async function finaliseDirectOrder(consolidatedText, convo, client, R) {
+  const products     = await listProducts({});
+  const parsed       = await parseQuotationRequest(consolidatedText, { products });
+  const productsById = new Map(products.map((p) => [p.id, p]));
+
+  const unmatchedItems = [...(parsed.unmatchedText || [])];
+  const lineItems      = [];
+
+  for (const item of parsed.items || []) {
+    const product = productsById.get(item.productId);
+    if (!product || !item.quantity || item.quantity <= 0) {
+      unmatchedItems.push(item.description || 'unrecognised item');
+      continue;
+    }
+    const qty       = item.quantity;
+    const unitPrice = Number(product.price);
+    const sizes     = Array.isArray(item.sizes) && item.sizes.length
+      ? item.sizes : [{ size: 'TBC', qty }];
+    lineItems.push({
+      productId:          product.id,
+      name:               product.name,
+      category:           product.category,
+      colour:             item.colour || '',
+      sizes,
+      quantity:           qty,
+      unitPrice,
+      brandingSurcharge:  0,
+      effectiveUnitPrice: unitPrice,
+      branding:           { type: 'none', position: '', detail: '' },
+      lineTotal:          unitPrice * qty,
+      priceConfirmed:     true,
+    });
+  }
+
+  if (unmatchedItems.length > 0) {
+    await updateState(convo.id, 'order_ask_method', { orderHistory: null, orderFollowups: 0 });
+    return R(TEMPLATES.ORDER_CUSTOM_ITEMS_NOT_ALLOWED, { unmatched: unmatchedItems });
+  }
+
+  if (!lineItems.length) {
+    await updateState(convo.id, 'order_gathering', { orderHistory: [], orderFollowups: 0 });
+    return R(() =>
+      `I couldn't identify any catalog items from your message. 😊\n\n` +
+      `Please describe what you'd like to order, including item types, colours, and sizes.\n\n` +
+      `Or reply *3* to request a formal quotation instead.`
+    );
+  }
+
+  const subtotal = parseFloat(lineItems.reduce((s, i) => s + i.lineTotal, 0).toFixed(2));
+  const vat      = parseFloat((subtotal * 0.15).toFixed(2));
+  const total    = parseFloat((subtotal + vat).toFixed(2));
+  const deposit  = parseFloat((total * 0.60).toFixed(2));
+
+  await updateState(convo.id, 'order_confirm_direct', {
+    pendingOrderItems: lineItems,
+    orderHistory:      null,
+    orderFollowups:    0,
+  });
+  return R(TEMPLATES.ORDER_CONFIRM_DIRECT, { items: lineItems, subtotal, vat, total, deposit });
+}
+
+// ── Main menu handler (8 options) ─────────────────────────────────────────────
 async function handleMainMenuSelection(option, convo, client, R) {
   switch (option) {
     case 1:
@@ -540,16 +753,22 @@ async function handleMainMenuSelection(option, convo, client, R) {
       });
 
     case 4:
+      return gateOrProceed(client, convo, 'order_ask_method', R, async () => {
+        await updateState(convo.id, 'order_ask_method');
+        return R(TEMPLATES.ORDER_ASK_METHOD);
+      });
+
+    case 5:
       await updateState(convo.id, 'order_tracking_ask');
       return R(TEMPLATES.ORDER_TRACKING_ASK);
 
-    case 5:
+    case 6:
       return R(TEMPLATES.BRANDING_INFO);
 
-    case 6:
+    case 7:
       return R(TEMPLATES.STORE_INFO);
 
-    case 7:
+    case 8:
       await updateState(convo.id, 'awaiting_consultant');
       notifyAsync(notifyConsultantRequested, convo, client, 'General enquiry');
       return R(TEMPLATES.AWAITING_CONSULTANT);

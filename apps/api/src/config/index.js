@@ -46,8 +46,10 @@ export const config = {
   },
 
   resend: {
-    apiKey:    optional('RESEND_API_KEY', ''),
-    fromEmail: optional('FROM_EMAIL', 'notifications@braquni.com'),
+    apiKey:        optional('RESEND_API_KEY', ''),
+    fromEmail:     optional('FROM_EMAIL', 'notifications@braquni.com'),
+    // Set this to your own email to receive all notifications before braquni.com is verified on Resend
+    overrideEmail: optional('NOTIFICATION_OVERRIDE_EMAIL', ''),
   },
 
   dashboardBaseUrl: optional('DASHBOARD_BASE_URL', 'http://localhost:5173'),

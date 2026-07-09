@@ -13,11 +13,12 @@ export const TEMPLATES = {
     `1️⃣  Shop / Retail\n` +
     `2️⃣  School / Corporate / Bulk Orders\n` +
     `3️⃣  Request a Quotation\n` +
-    `4️⃣  Track my Order\n` +
-    `5️⃣  Branding & Embroidery\n` +
-    `6️⃣  Store Information\n` +
-    `7️⃣  Speak to a Consultant\n\n` +
-    `💡 You can also type *hours*, *branding*, *store*, *po*, *quote*, or *track* at any time.`,
+    `4️⃣  Make an Order\n` +
+    `5️⃣  Track my Order\n` +
+    `6️⃣  Branding & Embroidery\n` +
+    `7️⃣  Store Information\n` +
+    `8️⃣  Speak to a Consultant\n\n` +
+    `💡 You can also type *hours*, *branding*, *store*, *quote*, *order*, or *track* at any time.`,
 
   RETAIL_MENU: () =>
     `Welcome to the Braq Uni Shop! 😊\n\n` +
@@ -213,6 +214,96 @@ export const TEMPLATES = {
     `Hmm, we couldn't find an open quotation to accept on your account. 🤔\n\n` +
     `If you've already received a quotation PDF, please share the *reference number* (e.g. BRQ-Q-…) and we'll sort it out.\n\n` +
     `Reply *3* to request a new quotation | *9* to speak to a consultant.`,
+
+  // ── MAKE ORDER FLOW ────────────────────────────────────────────────────────
+
+  ORDER_ASK_METHOD: () =>
+    `🛒 *Make an Order*\n\n` +
+    `How would you like to place your order?\n\n` +
+    `1️⃣  I have a quotation reference (BRQ-Q-...)\n` +
+    `2️⃣  Order catalog items directly\n\n` +
+    `Reply *back* or *0* for the main menu.`,
+
+  ORDER_ASK_REFERENCE: () =>
+    `Please share your *quotation reference number* (e.g. *BRQ-Q-20250101-0001*).\n\n` +
+    `You can find it in the PDF we sent to this WhatsApp.\n\n` +
+    `Reply *back* to go back.`,
+
+  ORDER_QUOTE_NOT_FOUND: () =>
+    `We couldn't find a quotation with that reference on your account. 🔍\n\n` +
+    `Please double-check the reference and try again, or reply *9* to speak to a consultant.`,
+
+  ORDER_QUOTE_NOT_READY: ({ status } = {}) =>
+    status === 'draft'
+      ? `Your quotation is still being reviewed by our team. 🕐\n\n` +
+        `We'll send you the PDF as soon as it's ready. Reply *9* to follow up with a consultant.`
+      : `This quotation has already been converted to an order or is no longer available.\n\n` +
+        `Reply *5* to track your existing order, or *9* to speak to a consultant.`,
+
+  ORDER_CONFIRM_QUOTE: ({ reference, items = [], subtotal, vat, total, deposit }) => {
+    const lines = items.map((i) => {
+      const colour = i.colour ? ` — ${i.colour}` : '';
+      const sizes  = Array.isArray(i.sizes) && i.sizes.filter(s => s.size !== 'TBC').length
+        ? '\n   ' + i.sizes.map((s) => `${s.size}×${s.qty}`).join('  ')
+        : '';
+      return `• ${i.name}${colour}  ×${i.quantity}  — R ${Number(i.lineTotal ?? i.unitPrice * i.quantity ?? 0).toFixed(2)}${sizes}`;
+    }).join('\n');
+    return (
+      `📋 *Quotation: ${reference}*\n\n` +
+      lines + `\n\n` +
+      `Subtotal:  R ${Number(subtotal).toFixed(2)}\n` +
+      `VAT (15%): R ${Number(vat).toFixed(2)}\n` +
+      `*Total:    R ${Number(total).toFixed(2)}*\n\n` +
+      `💳 *Deposit required (60%): R ${Number(deposit).toFixed(2)}*\n\n` +
+      `Ready to place this order?\n` +
+      `1️⃣  Yes, confirm order\n` +
+      `2️⃣  No, cancel\n\n` +
+      `Reply *9* to speak to a consultant first.`
+    );
+  },
+
+  ORDER_ASK_ITEMS: ({ name } = {}) =>
+    `Great! What would you like to order${name ? `, *${name}*` : ''}? 😊\n\n` +
+    `Please describe the items, colours, and sizes you need, for example:\n\n` +
+    `_"50 polo shirts, navy blue, S×10 M×20 L×20\n` +
+    `30 hoodies, black, M×15 L×15"_\n\n` +
+    `*Note:* For custom items not in our catalog, please request a quotation first (option 3).\n\n` +
+    `I'll help fill in any missing details.`,
+
+  ORDER_CUSTOM_ITEMS_NOT_ALLOWED: ({ unmatched = [] }) =>
+    `⚠️ Some items you requested aren't in our standard catalog:\n` +
+    unmatched.map((u) => `• ${u}`).join('\n') +
+    `\n\nFor custom items we need to prepare a quotation first so our team can price them correctly.\n\n` +
+    `Reply *3* to request a quotation | *back* to try a different order.`,
+
+  ORDER_CONFIRM_DIRECT: ({ items = [], subtotal, vat, total, deposit }) => {
+    const lines = items.map((i) => {
+      const colour = i.colour ? ` — ${i.colour}` : '';
+      const sizes  = Array.isArray(i.sizes) && i.sizes.filter(s => s.size !== 'TBC').length
+        ? '\n   ' + i.sizes.map((s) => `${s.size}×${s.qty}`).join('  ')
+        : '';
+      return `• ${i.name}${colour}  ×${i.quantity}  — R ${Number(i.lineTotal ?? 0).toFixed(2)}${sizes}`;
+    }).join('\n');
+    return (
+      `🛒 *Your Order Summary*\n\n` +
+      lines + `\n\n` +
+      `Subtotal:  R ${Number(subtotal).toFixed(2)}\n` +
+      `VAT (15%): R ${Number(vat).toFixed(2)}\n` +
+      `*Total:    R ${Number(total).toFixed(2)}*\n\n` +
+      `💳 *Deposit required (60%): R ${Number(deposit).toFixed(2)}*\n\n` +
+      `Ready to place this order?\n` +
+      `1️⃣  Yes, place order\n` +
+      `2️⃣  No, cancel\n\n` +
+      `Reply *9* to speak to a consultant first.`
+    );
+  },
+
+  ORDER_CREATED: ({ reference, deposit }) =>
+    `✅ *Order Placed — Ref: ${reference}*\n\n` +
+    `Your order has been received! 🎉\n\n` +
+    `A consultant will contact you shortly to arrange your *60% deposit of R ${Number(deposit).toFixed(2)}* — this kicks off your production run.\n\n` +
+    `Track your order at any time by typing *track* or sending your reference: *${reference}*\n\n` +
+    `Reply *9* to speak to a consultant now | *0* for the main menu.`,
 
   // ── ORDER TRACKING ─────────────────────────────────────────────────────────
 
