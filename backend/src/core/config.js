@@ -34,7 +34,13 @@ export const config = {
     name:     optional('DB_NAME', 'postgres'),
     user:     optional('DB_USER', 'postgres'),
     password: optional('DB_PASSWORD', ''),
-    ssl:      optional('DB_SSL', 'false') === 'true',
+    // TLS (core/db.js): verify | no-verify | disable. Default: verify in production, no-verify elsewhere.
+    sslMode:  optional('DB_SSL_MODE', ''),
+    // CA certificate for 'verify': a path to a PEM file, or the PEM itself.
+    sslCa:    optional('DB_SSL_CA', ''),
+    connectTimeoutMs:   Math.max(1000, parseInt(optional('DB_CONNECT_TIMEOUT_MS', '15000'), 10) || 15000),
+    // Per-statement cap for the API / worker pool (migrations use their own client).
+    statementTimeoutMs: Math.max(1000, parseInt(optional('DB_STATEMENT_TIMEOUT_MS', '120000'), 10) || 120000),
   },
 
   meta: {
@@ -83,9 +89,74 @@ export const config = {
     concurrency: Math.max(1, parseInt(optional('WORKER_CONCURRENCY', '4'), 10) || 4),
     // Retry n waits min(2^n × base, 1h) + jitter
     backoffBaseMs: Math.max(1, parseInt(optional('JOB_BACKOFF_BASE_MS', '5000'), 10) || 5000),
+    // On SIGTERM, how long running jobs may take to finish (a bot turn can wait
+    // on up to three 20 s AI calls). Keep below the platform's kill grace period.
+    drainMs: Math.max(1000, parseInt(optional('WORKER_DRAIN_MS', '25000'), 10) || 25000),
   },
 
   broadcast: {
     ratePerSec: Math.max(1, Number(optional('BROADCAST_RATE_PER_SEC', '20')) || 20),
   },
 };
+
+// ── Production start-up check ─────────────────────────────────────────────────
+// The API and the worker refuse to start in production with a missing, default
+// or placeholder secret: an unset META_APP_SECRET would turn off webhook
+// signature checks (forged client messages), a guessable JWT_SECRET lets anyone
+// mint admin tokens. Scripts (migrate, seed) only need the database and do not
+// run this check.
+
+export const MIN_JWT_SECRET_LENGTH = 32;
+const DEV_JWT_SECRET = 'dev_secret_change_in_production';
+const DEFAULT_VERIFY_TOKEN = 'braquni_verify';
+/** .env.example placeholders: "your_…", "re_your_…", "…your-project-ref…". */
+const isPlaceholder = (v) => /(^|_)your[_-]|your-project-ref/i.test(String(v));
+
+/**
+ * Every problem with the production configuration (empty array → fine). Pure.
+ * @param {Record<string, string|undefined>} env  process.env
+ * @returns {string[]}
+ */
+export function productionConfigProblems(env) {
+  const problems = [];
+  const val = (k) => (env[k] ?? '').trim();
+  const need = (k, why) => {
+    if (!val(k)) problems.push(`${k} is required in production (${why})`);
+    else if (isPlaceholder(val(k))) problems.push(`${k} still holds the .env.example placeholder`);
+  };
+
+  need('DATABASE_URL', 'the database');
+  need('META_APP_SECRET', 'verifies the X-Hub-Signature-256 of every webhook — without it anyone can forge client messages');
+  need('META_WHATSAPP_TOKEN', 'sends WhatsApp messages');
+  need('META_PHONE_NUMBER_ID', 'sends WhatsApp messages');
+  need('META_WEBHOOK_VERIFY_TOKEN', 'Meta webhook verification handshake');
+  need('GEMINI_API_KEY', 'AI intent routing and quotation parsing');
+  need('RESEND_API_KEY', 'staff email notifications and reminders');
+  need('DASHBOARD_BASE_URL', 'links in staff emails and the CORS allow-list');
+
+  const jwt = val('JWT_SECRET');
+  if (!jwt) problems.push('JWT_SECRET is required in production (signs staff sessions)');
+  else if (jwt === DEV_JWT_SECRET || isPlaceholder(jwt)) problems.push('JWT_SECRET is a published default/placeholder — generate a random secret');
+  else if (jwt.length < MIN_JWT_SECRET_LENGTH) problems.push(`JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+
+  if (val('META_WEBHOOK_VERIFY_TOKEN') === DEFAULT_VERIFY_TOKEN) {
+    problems.push('META_WEBHOOK_VERIFY_TOKEN is the built-in default — choose a random value');
+  }
+  const sslMode = val('DB_SSL_MODE');
+  if (sslMode && sslMode !== 'verify') {
+    problems.push(`DB_SSL_MODE=${sslMode} turns off database certificate verification — use verify with DB_SSL_CA in production`);
+  }
+  if (val('WHATSAPP_WINDOW_CHECK') === 'off') {
+    problems.push('WHATSAPP_WINDOW_CHECK=off is for tests only — it breaks the WhatsApp 24-hour rule');
+  }
+  return problems;
+}
+
+/** Throw (listing every problem) when running in production with an unsafe configuration. */
+export function assertProductionConfig(env = process.env, mode = config.env) {
+  if (mode !== 'production') return;
+  const problems = productionConfigProblems(env);
+  if (problems.length) {
+    throw new Error(`Unsafe production configuration:\n  - ${problems.join('\n  - ')}`);
+  }
+}

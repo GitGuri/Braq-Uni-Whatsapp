@@ -241,6 +241,18 @@ Next step: collect the ${DEPOSIT_PERCENT}% deposit to begin production.
 // ── 6. Reminder (unclaimed after 2 hours) ─────────────────────────────────────
 export async function sendReminder(db, item, type) {
   const TYPE_LABELS = { quotation: 'Quotation', ticket: 'Ticket', conversation: 'Consultant Request' };
+
+  // Mark the reminder first, only while the item is still unclaimed and unreminded:
+  // a claim that landed after the scan read the row means no email (Q-3).
+  const reminderCol = type === 'quotation' ? 'staff_reminder_sent_at' : 'reminder_sent_at';
+  const table = type === 'quotation' ? 'quotations' : type === 'ticket' ? 'tickets' : 'conversations';
+  const { rows: still } = await db.query(
+    `UPDATE ${table} SET ${reminderCol} = NOW()
+     WHERE id = $1 AND assigned_staff_id IS NULL AND ${reminderCol} IS NULL RETURNING id`,
+    [item.id]
+  );
+  if (!still.length) return false;
+
   const link = type === 'quotation'
     ? jobLink(item.id)
     : type === 'ticket'
@@ -261,11 +273,40 @@ Reference: ${item.reference ?? 'N/A'}
 
 Please pick this up as soon as you can — the customer is waiting.`
   );
+  return true;
+}
 
-  // Mark reminder sent using the correct column per table
-  const reminderCol = type === 'quotation' ? 'staff_reminder_sent_at' : 'reminder_sent_at';
-  const table = type === 'quotation' ? 'quotations' : type === 'ticket' ? 'tickets' : 'conversations';
-  await db.query(`UPDATE ${table} SET ${reminderCol} = NOW() WHERE id = $1`, [item.id]);
+// ── 6b. A consultant-owned chat whose client is waiting for an answer (MSG-2) ─
+/**
+ * Stamp the reminder (only if this inbound message was not reminded about yet and
+ * no reply went out meanwhile), then email the chat's owner — or every active
+ * consultant when the owner is inactive or has no email.
+ * @param {{ id, assigned_staff_id, client_name, last_inbound_at }} chat
+ * @returns {Promise<boolean>} whether a reminder was queued
+ */
+export async function sendUnansweredChatReminder(db, chat) {
+  const { rows: still } = await db.query(
+    `UPDATE conversations SET unanswered_reminder_at = NOW()
+     WHERE id = $1 AND state = 'consultant_active'
+       AND (unanswered_reminder_at IS NULL OR unanswered_reminder_at < $2)
+       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = $1 AND m.direction = 'outbound' AND m.created_at > $2)
+     RETURNING id`,
+    [chat.id, chat.last_inbound_at]
+  );
+  if (!still.length) return false;
+  const { rows: owner } = chat.assigned_staff_id
+    ? await db.query('SELECT id, name, email FROM staff WHERE id = $1 AND is_active = true', [chat.assigned_staff_id])
+    : { rows: [] };
+  const hoursAgo = Math.max(1, Math.round((Date.now() - new Date(chat.last_inbound_at).getTime()) / 3_600_000));
+  await send(db,
+    `⏰ Client waiting for your reply — ${chat.client_name ?? 'Unknown'}`,
+    `${chat.client_name ?? 'A client'} wrote ${hoursAgo} hour${hoursAgo !== 1 ? 's' : ''} ago in a chat you took over, and has had no reply.
+The bot stays silent while a consultant owns the chat — reply, or hand it back to the bot.
+
+👉 Open the chat: ${config.dashboardBaseUrl}/inbox/${chat.id}`,
+    owner[0]?.email ? owner : null
+  );
+  return true;
 }
 
 // ── 7. Proof feedback from the client (approve / changes requested) ─────────

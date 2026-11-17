@@ -636,8 +636,16 @@ describe('hold, assign, materials, proof', () => {
     const o = await withOrder();
     t.wa.failNext(1);
     await svc.setOrderHold(o.id, { isOnHold: true, holdReason: 'supplier_delay' });
-    assert.deepEqual(await drain(), { done: 0, retry: 1, dead: 0 });
+    // TEST-1: with the 10 ms test backoff the retry may already run inside the same
+    // drain — assert the behaviour, not the timing: one failure retried, never dead,
+    // the hold stands and the client gets the notice exactly once.
+    const first = await drain();
+    assert.equal(first.retry, 1);
+    assert.equal(first.dead, 0);
+    await t.query(`UPDATE jobs SET run_at = now() WHERE status = 'pending'`);
+    await drain();
     assert.equal((await orderRow(o.id)).is_on_hold, true);
+    assert.equal(t.wa.sent.length, 1, 'delivered once after the retry');
   });
 
   test('assignOrder: 404 and success', async () => {
@@ -789,6 +797,18 @@ describe('placeDirectOrder / placeOrderFromQuotation (bot)', () => {
     const mine = await t.factory.quotation({ status: 'sent', valid_until: '2999-01-01' });
     await assert.rejects(svc.placeOrderFromQuotation(other.id, mine.id), (e) => e.status === 404);
     assert.equal(await count('orders'), 0);
+  });
+
+  test('FIN-2: an ACCEPTED quote past its validity cannot be ordered from on WhatsApp (409 QUOTE_EXPIRED); staff still can', async () => {
+    const stale = await t.factory.quotation({ status: 'accepted', valid_until: '2020-01-01', total: '1150.00' });
+    await assert.rejects(svc.placeOrderFromQuotation(stale.client_id, stale.id), (e) => e.status === 409 && e.extra?.code === 'QUOTE_EXPIRED');
+    assert.equal(await count('orders'), 0);
+    const fresh = await t.factory.quotation({ status: 'accepted', valid_until: '2999-01-01', total: '1150.00' });
+    const o = await svc.placeOrderFromQuotation(fresh.client_id, fresh.id);
+    assert.ok(o.reference);
+    const staff = await t.factory.staff({ role: 'consultant' });
+    const byStaff = await svc.convertFromQuotation(stale.id, staff);
+    assert.ok((byStaff.order ?? byStaff).reference, 'staff conversion keeps its rules (business decision)');
   });
 });
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { App, Button, Segmented, Skeleton } from 'antd'
+import { App, Button, Popconfirm, Segmented, Skeleton } from 'antd'
 import {
   InboxOutlined, FileTextOutlined, ToolOutlined, WarningOutlined, CustomerServiceOutlined,
   CheckCircleOutlined, RightOutlined, LikeOutlined,
@@ -22,8 +22,14 @@ import Seam from '../components/Seam.jsx'
 import { FlagPills } from '../components/StatusPill.jsx'
 import ErrorState from '../components/ErrorState.jsx'
 import { useStatus } from '../lib/status.js'
+import { ADVANCE_EXPECT } from './Jobs/useJobActions.js'
 
 const ROWS_PER_QUEUE = 4
+// One-click row steps that are hard to take back: confirm first.
+const CONFIRM_ROW = {
+  accept_and_order: 'Mark the quote accepted and create the order?',
+  create_order: 'Create the order for this quote?',
+}
 
 /** Counts up to `value` once, the first time real data arrives; later changes just update. */
 function useCountUp(value, ready) {
@@ -80,11 +86,22 @@ function JobRow({ job, onRun, running }) {
         </div>
         {!action && <RightOutlined aria-hidden="true" className="braq-row-chevron" />}
       </Link>
-      {action && (
+      {action && (CONFIRM_ROW[action.key] ? (
+        <Popconfirm
+          title={CONFIRM_ROW[action.key]}
+          description={`${job.client_name ?? 'Client'} · ${job.quotation_reference ?? ''}`}
+          okText="Create order"
+          onConfirm={() => onRun(job)}
+        >
+          <Button size="small" loading={running} aria-label={`${action.label}: ${job.client_name ?? ''}`}>
+            {action.label}
+          </Button>
+        </Popconfirm>
+      ) : (
         <Button size="small" loading={running} onClick={() => onRun(job)} aria-label={`${action.label}: ${job.client_name ?? ''}`}>
           {action.label}
         </Button>
-      )}
+      ))}
     </div>
   )
 }
@@ -157,7 +174,13 @@ export default function Dashboard() {
     onError: (err) => message.error(errorMessage(err, 'Could not claim this ticket')),
   })
   // One-click next step from a queue row (the API says which steps need no input).
-  const runRow = useJobMutation({ mutationFn: (job) => runActionEndpoint(job.primary_action.endpoint) })
+  // A stage advance says which stage it means to reach, so a stale row cannot skip a stage (409 STALE).
+  const runRow = useJobMutation({
+    mutationFn: (job) => {
+      const expect = ADVANCE_EXPECT[job.primary_action.key]
+      return runActionEndpoint(job.primary_action.endpoint, expect ? { expect } : {})
+    },
+  })
   const onRun = (job) => runRow.mutate(job, {
     onSuccess: (res) => {
       const ref = res?.order?.reference

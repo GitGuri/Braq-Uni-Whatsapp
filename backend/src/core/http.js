@@ -9,6 +9,42 @@ export const asyncHandler = (fn) => (req, res, next) => {
   }
 };
 
+/** Wrap one (req, res, next) handler like asyncHandler, keeping its arity < 4 (not an error handler). */
+function guardHandler(fn) {
+  if (fn.length >= 4 || fn.__guarded) return fn;
+  const guarded = function guarded(req, res, next) {
+    try {
+      const out = fn.call(this, req, res, next);
+      if (out && typeof out.then === 'function') out.then(undefined, next);
+      return out;
+    } catch (err) {
+      return next(err);
+    }
+  };
+  guarded.__guarded = true;
+  return guarded;
+}
+
+/**
+ * Safety net for a whole router (SEC-4): every route handler and router-level
+ * middleware gets asyncHandler semantics, so a rejected promise or a synchronous
+ * throw reaches the error middleware (500 + log) instead of becoming an
+ * unhandled rejection, which on Node ≥ 15 terminates the API process.
+ * Call after all routes are registered. Returns the router.
+ */
+export function catchAsyncRoutes(router) {
+  for (const layer of router.stack || []) {
+    if (layer.route) {
+      for (const inner of layer.route.stack) inner.handle = guardHandler(inner.handle);
+    } else if (layer.handle?.stack) {
+      catchAsyncRoutes(layer.handle);               // nested router
+    } else if (typeof layer.handle === 'function') {
+      layer.handle = guardHandler(layer.handle);
+    }
+  }
+  return router;
+}
+
 /**
  * Validate request parts with zod schemas; parsed values land on req.valid.
  * validate({ body: Schema, query: Schema, params: Schema })

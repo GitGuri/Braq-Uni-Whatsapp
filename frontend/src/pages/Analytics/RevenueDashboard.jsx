@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import { getRevenueData, getTopClients, getTopProducts } from '../../api/analytics.js'
 import StatusPill from '../../components/StatusPill.jsx'
 import NoAccess from '../../components/NoAccess.jsx'
+import ErrorState from '../../components/ErrorState.jsx'
 import { useCan } from '../../lib/useCan.js'
 import { money } from '../../lib/format.js'
 import { STAGES, normaliseStage } from '../../lib/stages.js'
@@ -126,15 +127,15 @@ export default function RevenueDashboard() {
 
 function Revenue() {
   const screens = Grid.useBreakpoint()
-  const { data: rev, isLoading: revLoading } = useQuery({
+  const { data: rev, isLoading: revLoading, error: revError, refetch: refetchRev } = useQuery({
     queryKey: ['analytics', 'revenue'],
     queryFn: getRevenueData,
   })
-  const { data: clientsData, isLoading: clientsLoading } = useQuery({
+  const { data: clientsData, isLoading: clientsLoading, error: clientsError, refetch: refetchClients } = useQuery({
     queryKey: ['analytics', 'top-clients'],
     queryFn: () => getTopClients(8),
   })
-  const { data: productsData, isLoading: productsLoading } = useQuery({
+  const { data: productsData, isLoading: productsLoading, error: productsError, refetch: refetchProducts } = useQuery({
     queryKey: ['analytics', 'top-products'],
     queryFn: () => getTopProducts(8),
   })
@@ -221,6 +222,11 @@ function Revenue() {
 
       {revLoading ? (
         <section className="braq-panel" style={{ padding: 24, marginBottom: 20 }}><Skeleton active paragraph={{ rows: 4 }} /></section>
+      ) : revError ? (
+        // Not R 0: the numbers did not load.
+        <section className="braq-panel" style={{ marginBottom: 20 }}>
+          <ErrorState title="Could not load the revenue figures" error={revError} onRetry={refetchRev} />
+        </section>
       ) : (
         <>
           {/* ── Headline figures ─────────────────────────────────────── */}
@@ -325,7 +331,7 @@ function Revenue() {
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Panel id="rev-clients" title="Top clients by spend">
-            <Table
+            {clientsError ? <ErrorState title="Could not load top clients" error={clientsError} onRetry={refetchClients} /> : <Table
               dataSource={topClients}
               columns={clientColumns}
               rowKey="id"
@@ -334,12 +340,12 @@ function Revenue() {
               pagination={false}
               scroll={{ x: 'max-content' }}
               locale={{ emptyText: 'No paying clients yet.' }}
-            />
+            />}
           </Panel>
         </Col>
         <Col xs={24} lg={12}>
           <Panel id="rev-products" title="Best-selling products">
-            <Table
+            {productsError ? <ErrorState title="Could not load best-selling products" error={productsError} onRetry={refetchProducts} /> : <Table
               dataSource={topProducts}
               columns={productColumns}
               rowKey="product"
@@ -348,7 +354,7 @@ function Revenue() {
               pagination={false}
               scroll={{ x: 'max-content' }}
               locale={{ emptyText: 'No products on orders yet.' }}
-            />
+            />}
           </Panel>
         </Col>
       </Row>

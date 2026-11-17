@@ -11,7 +11,7 @@ import { createAcceptedQuotation } from '../quotations/service.js';
 import { convertQuotationToOrder, parseLineItems } from './convert.js';
 import { queueWhatsAppText, TEMPLATE_FALLBACKS } from '../notifications/whatsapp.js';
 import { recordJobEvent } from '../jobs/events.js';
-import { recordPaymentTx } from '../payments/service.js';
+import { recordPaymentTx, findPaymentByKey, lockOrderForPayment } from '../payments/service.js';
 import { toCentsOrNull, formatRand } from '../../core/money.js';
 
 export { toCanonicalStage };
@@ -243,14 +243,36 @@ export async function placeOrderFromQuotation(clientId, quotationId, { conversat
   });
 }
 
-/** Direct catalog order: an accepted (auto) quotation with the line items, then the order. */
-export async function placeDirectOrder(clientId, lineItems, { conversationId = null } = {}) {
+/**
+ * Direct catalog order — the client confirmed a WhatsApp order: an accepted (auto)
+ * quotation with the line items, then the order, one transaction.
+ *  - sourceEventId: a replay of the same bot turn returns the order it already
+ *    created (keyed through the quotation's source_event_id, DAT-2).
+ *  - The conversation's pendingOrderItems are consumed in the same transaction, so
+ *    if the turn then fails, a second "yes" cannot place the order again.
+ */
+export async function placeDirectOrder(clientId, lineItems, { conversationId = null, sourceEventId = null } = {}) {
   return withTransaction(async (tx) => {
+    const earlier = await orderForEvent(sourceEventId, tx);
+    if (earlier) return earlier;
+    if (conversationId) {
+      await tx.query(`UPDATE conversations SET context = context - 'pendingOrderItems' WHERE id = $1`, [conversationId]);
+    }
     const quotation = await createAcceptedQuotation(tx, {
-      clientId, lineItems, conversationId, autoQuoted: true, source: 'bot_order', notes: 'Direct WhatsApp order',
+      clientId, lineItems, conversationId, autoQuoted: true, source: 'bot_order', notes: 'Direct WhatsApp order', sourceEventId,
     });
     return convertQuotationToOrder(tx, { quotationId: quotation.id, source: 'bot_order', conversationId, notifyClient: false });
   });
+}
+
+/** The order a bot turn for this inbound event already placed (through its quotation), or null. */
+export async function orderForEvent(sourceEventId, db = { query }) {
+  if (sourceEventId == null) return null;
+  const { rows } = await db.query(
+    `SELECT o.* FROM orders o JOIN quotations q ON q.id = o.quotation_id WHERE q.source_event_id = $1`,
+    [sourceEventId]
+  );
+  return rows[0] || null;
 }
 
 // ── Advance an order stage (guards + overrides) ───────────────────────────────
@@ -289,7 +311,10 @@ export async function advanceOrderStageTx(tx, orderId, actor, {
   const staff = asActor(actor);
   let recorded = null;
   if (payment) {
-    ({ payment: recorded } = await recordPaymentTx(tx, orderId, { type: payment.type || 'balance', amount: payment.amount, notes: payment.notes }));
+    ({ payment: recorded } = await recordPaymentTx(tx, orderId, {
+      type: payment.type || 'balance', amount: payment.amount, currency: payment.currency, notes: payment.notes,
+      idempotencyKey: payment.idempotencyKey ?? null, recordedBy: staff?.id ?? null,
+    }));
   }
 
   const { rows } = await tx.query(
@@ -420,14 +445,28 @@ async function outstandingAfter(tx, order) {
  * ("Record deposit" with "Start production now"). A refused start rolls the
  * payment back. → { payment, advanced?: { order, from, to } }
  */
-export async function recordPaymentAndAdvance(orderId, actor, { type, amount, currency, notes, startProduction = null }) {
+export async function recordPaymentAndAdvance(orderId, actor, { type, amount, currency, notes, startProduction = null, idempotencyKey = null }) {
+  const recordedBy = asActor(actor)?.id ?? null;
   return withTransaction(async (tx) => {
+    // A replayed submission (same key) returns the first payment and does not
+    // advance again — the first request already did both, atomically.
+    if (idempotencyKey) {
+      await lockOrderForPayment(tx, orderId);
+      const existing = await findPaymentByKey(tx, orderId, idempotencyKey);
+      if (existing) {
+        if (existing.type !== type || Math.round(Number(existing.amount) * 100) !== Math.round(Number(amount) * 100)) {
+          throw new HttpError(409, 'This payment form was already submitted with different details — refresh and record it again',
+            { code: 'IDEMPOTENCY_MISMATCH' });
+        }
+        return { payment: existing, replayed: true };
+      }
+    }
     if (!startProduction) {
-      const { payment } = await recordPaymentTx(tx, orderId, { type, amount, currency, notes });
+      const { payment } = await recordPaymentTx(tx, orderId, { type, amount, currency, notes, idempotencyKey, recordedBy });
       return { payment };
     }
     const advanced = await advanceOrderStageTx(tx, orderId, actor, {
-      payment: { type, amount, notes },
+      payment: { type, amount, currency, notes, idempotencyKey },
       estimatedCompletion: startProduction.estimatedCompletion,
       notes: startProduction.notes,
       expect: 'in_production',

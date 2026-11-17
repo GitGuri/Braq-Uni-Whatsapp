@@ -67,12 +67,18 @@ export async function claimBatch(client, workerId, limit = 1) {
   return rows;
 }
 
-export async function complete(client, jobId) {
-  await client.query(
+/**
+ * Mark a job done. lockedBy (the worker that claimed it): only while that worker
+ * still holds it — a job reclaimed after a stall and re-run elsewhere is not
+ * overwritten by the slow first run (Q-1). Returns false when the lock was lost.
+ */
+export async function complete(client, jobId, lockedBy = null) {
+  const { rowCount } = await client.query(
     `UPDATE jobs SET status = 'done', finished_at = now(), locked_at = NULL, locked_by = NULL, last_error = NULL
-     WHERE id = $1`,
-    [jobId]
+     WHERE id = $1 AND ($2::text IS NULL OR (locked_by = $2 AND status = 'running'))`,
+    [jobId, lockedBy]
   );
+  return rowCount > 0;
 }
 
 /** Delay before retry n (1-based): min(2^n × base, 1h) + up to 1s jitter. */
@@ -83,26 +89,29 @@ export function backoffMs(attempts, baseMs = config.worker.backoffBaseMs) {
 /**
  * Record a failed attempt: dead-letter when attempts are used up (or the error
  * is permanent), otherwise back to pending with exponential backoff.
- * @returns {'dead'|'retry'}
+ * @returns {'dead'|'retry'|'lost'} lost: another worker owns the job now (it was reclaimed)
  */
 export async function fail(client, job, err) {
   const message = String(err?.stack || err?.message || err).slice(0, 4000);
   const dead = err?.permanent === true || job.attempts >= job.max_attempts;
+  // Fenced like complete(): only while this worker still holds the job (Q-1).
+  const fence = `AND ($LB::text IS NULL OR (locked_by = $LB AND status = 'running'))`;
+  const lockedBy = job.locked_by ?? null;
   if (dead) {
-    await client.query(
+    const { rowCount } = await client.query(
       `UPDATE jobs SET status = 'dead', finished_at = now(), locked_at = NULL, locked_by = NULL, last_error = $2
-       WHERE id = $1`,
-      [job.id, message]
+       WHERE id = $1 ${fence.replaceAll('$LB', '$3')}`,
+      [job.id, message, lockedBy]
     );
-    return 'dead';
+    return rowCount ? 'dead' : 'lost';
   }
-  await client.query(
+  const { rowCount } = await client.query(
     `UPDATE jobs SET status = 'pending', run_at = now() + ($2::int * interval '1 millisecond'),
             locked_at = NULL, locked_by = NULL, last_error = $3
-     WHERE id = $1`,
-    [job.id, backoffMs(job.attempts), message]
+     WHERE id = $1 ${fence.replaceAll('$LB', '$4')}`,
+    [job.id, backoffMs(job.attempts), message, lockedBy]
   );
-  return 'retry';
+  return rowCount ? 'retry' : 'lost';
 }
 
 /** Jobs left 'running' by a crashed worker go back to pending (or dead when out of attempts). */

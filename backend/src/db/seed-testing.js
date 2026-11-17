@@ -5,8 +5,10 @@
  */
 import bcrypt from 'bcryptjs';
 import fs from 'node:fs';
+import { config } from '../core/config.js';
 import { pool, query } from '../core/db.js';
 import { logger } from '../core/logger.js';
+import { productionReason, configTarget } from './safety.js';
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 const calc = (items) => {
@@ -651,6 +653,10 @@ async function seedConversations() {
 
 // ── RUNNER ────────────────────────────────────────────────────────────────────
 async function run() {
+  // Demo data (and staff with a published password) must never reach production.
+  const prod = productionReason(configTarget(config));
+  if (prod) throw new Error(`Refusing to load demo data: ${prod}. seed-testing is for local databases only.`);
+
   logger.info('');
   logger.info('═══════════════════════════════════════════════════════════════');
   logger.info(' Braq Connect™ — Testing Seed (new schema)');
@@ -688,7 +694,7 @@ async function run() {
 
 run()
   .catch((err) => {
-    logger.error('Seed failed', { error: err.message, stack: err.stack });
+    logger.error('Seed failed', { error: err.message });
     process.exitCode = 1;
   })
   .finally(() => pool.end());

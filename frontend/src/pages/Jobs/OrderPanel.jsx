@@ -12,6 +12,7 @@ import { useStatus } from '../../lib/status.js'
 import { useMeta } from '../../lib/useMeta.js'
 import { money, date, dateTime, sentence } from '../../lib/format.js'
 import { errorMessage } from '../../utils/errorMessage.js'
+import { newIdempotencyKey } from '../../lib/idempotency.js'
 import StatusPill from '../../components/StatusPill.jsx'
 import EmptyState from '../../components/EmptyState.jsx'
 import ActionForm from '../../components/ActionForm.jsx'
@@ -33,6 +34,7 @@ const HOLD_REASONS = [
   { value: 'other', label: 'Other' },
 ]
 const PAYMENT_TYPE_LABEL = { deposit: 'Deposit', balance: 'Balance', full: 'Full payment' }
+const ROSTER_MAX_BYTES = 5 * 1024 * 1024
 const stockLabel = (v) => STOCK_STATUS_OPTIONS.find((o) => o.value === v)?.label ?? sentence(v)
 
 const toNum = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
@@ -100,6 +102,7 @@ export default function OrderPanel({ job, run, pendingKey }) {
   const { order, payments, quotation, lifecycle } = job
   const [payOpen, setPayOpen] = useState(false)
   const [payError, setPayError] = useState(null)
+  const [payKey, setPayKey] = useState(null)
   const [holdOpen, setHoldOpen] = useState(false)
   const [materialsOpen, setMaterialsOpen] = useState(false)
   const [sheetLoading, setSheetLoading] = useState(false)
@@ -144,14 +147,21 @@ export default function OrderPanel({ job, run, pendingKey }) {
   const hasLineItems = Array.isArray(quotation?.line_items) && quotation.line_items.length > 0
 
   const payAction = paymentAction(suggestedType, suggestedAmount)
-  const openPayment = () => { setPayError(null); setPayOpen(true) }
+  // One idempotency key per opening of the dialog: retrying after an error or a
+  // timeout reuses it (the server returns the first payment, not a second one).
+  const openPayment = () => { setPayError(null); setPayKey(newIdempotencyKey()); setPayOpen(true) }
   const submitPayment = async (values) => {
     setPayError(null)
-    const res = await run(payAction, values)
+    const res = await run(payAction, values, { idempotencyKey: payKey })
     if (res.ok) {
-      message.success(`${PAYMENT_TYPE_LABEL[values.type] ?? 'Payment'} of ${money(values.amount)} recorded`)
+      const what = `${PAYMENT_TYPE_LABEL[values.type] ?? 'Payment'} of ${money(values.amount)}`
+      message.success(res.result?.replayed ? `Already recorded — ${what}` : `${what} recorded`)
       setPayOpen(false)
-    } else setPayError(res.error)
+    } else {
+      // Same key, different details: the server asks for a fresh submission.
+      if (res.error?.code === 'IDEMPOTENCY_MISMATCH') setPayKey(newIdempotencyKey())
+      setPayError(res.error)
+    }
   }
 
   const openSheet = async () => {
@@ -264,6 +274,14 @@ export default function OrderPanel({ job, run, pendingKey }) {
             <Upload
               accept=".xlsx,.csv"
               showUploadList={false}
+              beforeUpload={(file) => {
+                // The server takes rosters up to 5 MB — say so before sending it.
+                if (file.size > ROSTER_MAX_BYTES) {
+                  message.error('That file is too big — rosters can be up to 5 MB.')
+                  return Upload.LIST_IGNORE
+                }
+                return true
+              }}
               customRequest={async ({ file, onSuccess, onError }) => {
                 try {
                   const res = await upload.mutateAsync(file)

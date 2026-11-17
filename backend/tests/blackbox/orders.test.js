@@ -471,9 +471,12 @@ describe('payments', () => {
     let g = await api('GET', `/api/orders/${order.id}`);
     assert.equal(g.json.order.payment_status, 'deposit_paid');
 
-    const f = await api('POST', `/api/orders/${order.id}/payments`, { type: 'full', amount: 460, currency: 'USD' });
+    // FIN-9: a foreign currency would be summed into rand totals — refused, nothing stored.
+    const usd = await api('POST', `/api/orders/${order.id}/payments`, { type: 'full', amount: 460, currency: 'USD' });
+    assert.equal(usd.status, 400, usd.text);
+    const f = await api('POST', `/api/orders/${order.id}/payments`, { type: 'full', amount: 460, currency: 'ZAR' });
     assert.equal(f.status, 201, f.text);
-    assert.equal(f.json.payment.currency, 'USD');
+    assert.equal(f.json.payment.currency, 'ZAR');
 
     const l = await api('GET', `/api/orders/${order.id}/payments`);
     assert.equal(l.status, 200);

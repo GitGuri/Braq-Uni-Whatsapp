@@ -6,7 +6,7 @@
  */
 import { query, withTransaction } from '../../core/db.js';
 import { logger } from '../../core/logger.js';
-import { sendReminder } from '../../modules/notifications/service.js';
+import { sendReminder, sendUnansweredChatReminder } from '../../modules/notifications/service.js';
 
 const UNCLAIMED_AFTER = `NOW() - INTERVAL '2 hours'`;
 
@@ -14,17 +14,19 @@ const UNCLAIMED_AFTER = `NOW() - INTERVAL '2 hours'`;
 export async function checkUnclaimed() {
   logger.debug('reminder.scan: checking unclaimed items');
 
-  // Draft quotations notified but not yet claimed or reminded
+  // Draft quotations notified but not yet claimed or reminded. Also bot-made drafts
+  // whose staff email never went out (the bot turn failed after creating them, MSG-4):
+  // source_event_id is set and notified_at is still NULL.
   const { rows: quotations } = await query(`
-    SELECT q.id, q.reference, q.notified_at,
+    SELECT q.id, q.reference, COALESCE(q.notified_at, q.created_at) AS notified_at,
            c.name AS client_name
     FROM quotations q
     LEFT JOIN clients c ON c.id = q.client_id
     WHERE q.assigned_staff_id    IS NULL
-      AND q.notified_at          IS NOT NULL
       AND q.staff_reminder_sent_at IS NULL
-      AND q.notified_at          < ${UNCLAIMED_AFTER}
       AND q.status               = 'draft'
+      AND (q.notified_at < ${UNCLAIMED_AFTER}
+           OR (q.notified_at IS NULL AND q.source_event_id IS NOT NULL AND q.created_at < ${UNCLAIMED_AFTER}))
   `);
 
   for (const row of quotations) {
@@ -38,15 +40,15 @@ export async function checkUnclaimed() {
 
   // Tickets open/in_progress, notified but not yet claimed or reminded
   const { rows: tickets } = await query(`
-    SELECT t.id, t.notified_at,
+    SELECT t.id, COALESCE(t.notified_at, t.created_at) AS notified_at,
            c.name AS client_name
     FROM tickets t
     LEFT JOIN clients c ON c.id = t.client_id
     WHERE t.assigned_staff_id IS NULL
-      AND t.notified_at        IS NOT NULL
       AND t.reminder_sent_at   IS NULL
-      AND t.notified_at        < ${UNCLAIMED_AFTER}
       AND t.status             IN ('open', 'in_progress')
+      AND (t.notified_at < ${UNCLAIMED_AFTER}
+           OR (t.notified_at IS NULL AND t.source_event_id IS NOT NULL AND t.created_at < ${UNCLAIMED_AFTER}))
   `);
 
   for (const row of tickets) {
@@ -80,8 +82,30 @@ export async function checkUnclaimed() {
     }
   }
 
-  const counts = { quotations: quotations.length, tickets: tickets.length, conversations: conversations.length };
-  if (counts.quotations + counts.tickets + counts.conversations > 0) logger.info('reminder.scan: reminders sent', counts);
+  // Consultant-owned chats where the client's latest message has waited 2h+ with no
+  // reply (the bot is silent in consultant_active, so nobody else will answer — MSG-2).
+  const { rows: unanswered } = await query(`
+    SELECT cv.id, cv.assigned_staff_id, c.name AS client_name, li.at AS last_inbound_at
+    FROM conversations cv
+    LEFT JOIN clients c ON c.id = cv.client_id
+    CROSS JOIN LATERAL (SELECT MAX(m.created_at) AS at FROM messages m
+                        WHERE m.conversation_id = cv.id AND m.direction = 'inbound') li
+    WHERE cv.state = 'consultant_active' AND cv.is_open
+      AND li.at IS NOT NULL AND li.at < ${UNCLAIMED_AFTER}
+      AND (cv.unanswered_reminder_at IS NULL OR cv.unanswered_reminder_at < li.at)
+      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = cv.id AND m.direction = 'outbound' AND m.created_at > li.at)
+  `);
+  let unansweredSent = 0;
+  for (const row of unanswered) {
+    try {
+      if (await withTransaction((tx) => sendUnansweredChatReminder(tx, row))) unansweredSent++;
+    } catch (err) {
+      logger.error('reminder.scan: failed unanswered-chat reminder', { id: row.id, error: err.message });
+    }
+  }
+
+  const counts = { quotations: quotations.length, tickets: tickets.length, conversations: conversations.length, unansweredChats: unansweredSent };
+  if (Object.values(counts).some((n) => n > 0)) logger.info('reminder.scan: reminders sent', counts);
   return counts;
 }
 

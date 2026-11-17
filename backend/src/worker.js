@@ -4,6 +4,8 @@
  * WORKER_IN_PROCESS=false when workers run separately. Any number of workers
  * can run at once (jobs are claimed with SKIP LOCKED; schedules are deduped).
  */
+import { config, assertProductionConfig } from './core/config.js';
+import { installProcessHandlers } from './core/process.js';
 import { logger } from './core/logger.js';
 import { pool, testConnection } from './core/db.js';
 import { assertSchemaUpToDate } from './core/migrate.js';
@@ -11,20 +13,20 @@ import { startWorker } from './workers/loop.js';
 import { startScheduler } from './workers/scheduler.js';
 
 async function main() {
+  assertProductionConfig();
   await testConnection();
   await assertSchemaUpToDate();
   const worker = startWorker();
   const scheduler = startScheduler();
 
-  const shutdown = async (signal) => {
-    logger.info(`worker: ${signal} received, draining`);
-    scheduler.stop();
-    await worker.stop();
-    await pool.end().catch(() => {});
-    process.exit(0);
-  };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  installProcessHandlers({
+    name: 'worker',
+    async drain() {
+      scheduler.stop();
+      await worker.stop({ timeoutMs: config.worker.drainMs });
+      await pool.end().catch(() => {});
+    },
+  });
 }
 
 main().catch((err) => {

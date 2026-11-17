@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import { WarningOutlined, MessageOutlined, ProjectOutlined, UserOutlined, CheckOutlined } from '@ant-design/icons'
 import { getTicket, updateTicket } from '../../api/tickets.js'
-import { listStaff } from '../../api/staff.js'
+import { listStaff, assignableStaff } from '../../api/staff.js'
 import { actionError } from '../../api/adapt.js'
 import { qk, useJobMutation } from '../../lib/queryKeys.js'
 import { useStatus } from '../../lib/status.js'
@@ -149,7 +149,7 @@ export default function TicketDetail() {
                   id="ticket-assignee"
                   value={ticket.assigned_staff_id ?? undefined}
                   placeholder="Nobody — choose a staff member"
-                  options={staffList.map((s) => ({ value: s.id, label: `${s.name} (${s.role})` }))}
+                  options={assignableStaff(staffList, ticket.assigned_staff_id).map((s) => ({ value: s.id, label: `${s.name} (${s.role})` }))}
                   style={{ width: '100%' }}
                   // Clearing sends null, which unassigns the ticket.
                   onChange={(v) => update({ assignedStaffId: v ?? null }, v ? 'Ticket assigned' : 'Ticket unassigned')}

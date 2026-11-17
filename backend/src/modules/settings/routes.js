@@ -21,6 +21,10 @@ settingsRouter.get('/', requirePermission('settings.read'), asyncHandler(async (
 settingsRouter.patch('/:key', requirePermission('settings.write'), asyncHandler(async (req, res) => {
   const { value } = req.body ?? {};
   if (value === undefined) return res.status(400).json({ error: 'value required' });
+  // Settings are stored as text: a nested object would be saved as "[object Object]" (SEC-10).
+  if (!['string', 'number', 'boolean'].includes(typeof value) || String(value).length > 2000) {
+    return res.status(400).json({ error: 'value must be a string, number or boolean (max 2000 characters)' });
+  }
   try {
     res.json({ setting: await settingsService.updateSetting(req.params.key, value) });
   } catch (err) {

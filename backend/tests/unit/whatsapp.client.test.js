@@ -128,6 +128,32 @@ describe('templates (24-hour window) and Meta error codes', () => {
     await assert.rejects(wa.sendTextMessage('1', 'x'), (e) => !wa.isReengagementError(e) && e.metaCode === 131030);
   });
 
+  test('MSG-3 isPermanentSendError: 400/404 that are not rate limits / outages / re-engagement', () => {
+    const e = (httpStatus, metaCode) => ({ httpStatus, metaCode });
+    assert.equal(wa.isPermanentSendError(e(400, 100)), true, 'invalid parameter');
+    assert.equal(wa.isPermanentSendError(e(400, 131026)), true, 'undeliverable');
+    assert.equal(wa.isPermanentSendError(e(404, null)), true);
+    assert.equal(wa.isPermanentSendError(e(400, 131047)), false, 're-engagement has its own template path');
+    assert.equal(wa.isPermanentSendError(e(400, 130429)), false, 'throughput limit → retry');
+    assert.equal(wa.isPermanentSendError(e(400, 131056)), false, 'pair rate limit → retry');
+    assert.equal(wa.isPermanentSendError(e(401, 190)), false, 'expired token → retry (ops can fix it)');
+    assert.equal(wa.isPermanentSendError(e(429, 4)), false);
+    assert.equal(wa.isPermanentSendError(e(500, 1)), false);
+    assert.equal(wa.isPermanentSendError(e(null, null)), false, 'network error → retry');
+  });
+
+  test('MSG-3 text and captions are clipped to WhatsApp limits (whole characters, "…" appended)', async () => {
+    assert.equal(wa.clipText('abc', 5), 'abc');
+    assert.equal(wa.clipText('abcdef', 5), 'abcd…');
+    assert.equal(Array.from(wa.clipText('👋'.repeat(10), 5)).length, 5, 'never splits an emoji');
+    const seen = capture(200, { messages: [{ id: 'wamid.LONG' }] });
+    await wa.sendTextMessage('1', 'x'.repeat(5000));
+    assert.equal(seen[0].text.body.length, wa.MAX_TEXT_LENGTH);
+    const seenDoc = capture(200, { messages: [{ id: 'wamid.DOC' }] });
+    await wa.sendDocument('1', { mediaId: 'M', filename: 'q.pdf', caption: 'c'.repeat(2000) });
+    assert.equal(seenDoc[0].document.caption.length, wa.MAX_CAPTION_LENGTH);
+  });
+
   test('templateConfig reads WHATSAPP_TEMPLATES (name or { name, language }); bad JSON / unknown → null', () => {
     const env = JSON.stringify({ order_stage: 'braq_order_stage', quote_ready: { name: 'braq_quote_ready', language: 'en_US' }, bad: {} });
     assert.deepEqual(wa.templateConfig('order_stage', env), { name: 'braq_order_stage', language: 'en' });

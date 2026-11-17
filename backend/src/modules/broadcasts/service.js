@@ -7,6 +7,7 @@
 // failed_count / status ('queued' → 'sending' → 'done') up to date.
 import { query, withTransaction } from '../../core/db.js';
 import { enqueue } from '../../core/queue.js';
+import { HttpError } from '../../core/errors.js';
 import { uploadMedia } from '../../integrations/whatsapp.client.js';
 import { TEMPLATES } from '../bot/templates.js';
 
@@ -79,12 +80,18 @@ const toRecipients = (rows) => rows
   .filter((r) => r.whatsapp_number)
   .map((r) => ({ clientId: r.client_id, to: r.whatsapp_number, ...(r.reference ? { reference: r.reference } : {}) }));
 
+export const AUDIENCES = Object.freeze(Object.keys(AUDIENCE_SQL));
+
 /**
  * Custom message (text and/or an image/PDF) to an audience
- * (all_clients | active_orders | corporate | retail; unknown → all clients).
+ * (all_clients | active_orders | corporate | retail). An unknown audience is
+ * refused — a typo must never widen a broadcast to every client.
  */
 export async function sendCustom(staffId, { message, audience, imageUrl, mediaId, mediaType, mediaFilename }) {
-  const { rows } = await query(Object.hasOwn(AUDIENCE_SQL, audience ?? '') ? AUDIENCE_SQL[audience] : AUDIENCE_SQL.all_clients);
+  if (!Object.hasOwn(AUDIENCE_SQL, audience ?? '')) {
+    throw new HttpError(400, `audience must be one of ${AUDIENCES.join(', ')}`);
+  }
+  const { rows } = await query(AUDIENCE_SQL[audience]);
 
   const mid = mediaId?.trim();
   const img = imageUrl?.trim();

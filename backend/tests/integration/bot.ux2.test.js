@@ -73,7 +73,10 @@ describe('registration in one message', () => {
     await inbound('Hi, I need a quote for 30 Dalview jerseys', { profileName: 'thabo mokoena' });
     const c1 = await clientRow();
     assert.equal(c1.name, 'Thabo Mokoena', 'WhatsApp profile name stored (tidied)');
-    assert.equal(replies().length, 1);
+    // A brand-new conversation also gets the after-hours notice when the suite runs
+    // outside SA business hours (Mon–Fri 08–17, Sat 08–13): count only the flow's reply.
+    const flow = replies().filter((r) => !/outside (our )?(business|office|trading) hours|closed right now|we're closed|after hours/i.test(r));
+    assert.equal(flow.length, 1, replies().join(' | '));
     assert.equal(lastReply(), 'To prepare your quote, please reply with your *school or company*. 📝');
     assert.equal((await convo()).context.pendingText, 'Hi, I need a quote for 30 Dalview jerseys');
 

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   App, Button, Modal, Form, Input, Select,
-  Alert, Space, Row, Col, Table, Upload, Image,
+  Alert, Space, Row, Col, Table, Upload, Image, Popconfirm,
 } from 'antd'
 import {
   NotificationOutlined, ClockCircleOutlined, SendOutlined,
@@ -13,6 +13,7 @@ import api from '../api/client.js'
 import { listBroadcasts, sendDelayBroadcast, sendBusyBroadcast, sendCustomBroadcast } from '../api/broadcasts.js'
 import { errorMessage } from '../utils/errorMessage.js'
 import { useCan } from '../lib/useCan.js'
+import ErrorState from '../components/ErrorState.jsx'
 
 /** "sent to 12 clients" / "on its way" — the send may be queued (202) rather than finished. */
 const sentTo = (r) => {
@@ -29,6 +30,9 @@ const AUDIENCE_OPTIONS = [
 ]
 
 const AUDIENCE_LABEL = Object.fromEntries(AUDIENCE_OPTIONS.map((o) => [o.value, o.label]))
+
+const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 /** A quick-send panel: what it does, then one button. */
 function ActionPanel({ icon, iconColor, title, description, action }) {
@@ -59,7 +63,7 @@ export default function Broadcasts() {
   const [customForm] = Form.useForm()
   const [delayForm]  = Form.useForm()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error: historyError, refetch: refetchHistory } = useQuery({
     queryKey: ['broadcasts'],
     queryFn: listBroadcasts,
   })
@@ -67,6 +71,13 @@ export default function Broadcasts() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['broadcasts'] })
 
   const handleAttachmentSelect = async (file) => {
+    // Check the size before sending: the server takes up to 20 MB, WhatsApp images up to 5 MB.
+    const isPdfFile = file.type === 'application/pdf'
+    const limit = isPdfFile ? ATTACHMENT_MAX_BYTES : IMAGE_MAX_BYTES
+    if (file.size > limit) {
+      message.error(`That file is too big — ${isPdfFile ? 'PDFs can be up to 20 MB' : 'images can be up to 5 MB'}.`)
+      return false
+    }
     setUploading(true)
     try {
       const form = new FormData()
@@ -180,7 +191,7 @@ export default function Broadcasts() {
             icon={<ClockCircleOutlined />}
             iconColor="var(--thread)"
             title="Supplier delay"
-            description="Tell every client with an active order that production is running late."
+            description="Tell every non-retail client with an active order that production is running late."
             action={
               <Button danger icon={<ClockCircleOutlined />} onClick={() => setDelayOpen(true)} block>
                 Send delay notice
@@ -196,9 +207,16 @@ export default function Broadcasts() {
             title="Busy period"
             description="Let active clients know replies may take longer than usual. Sends straight away."
             action={
-              <Button icon={<NotificationOutlined />} onClick={() => busyMut.mutate({})} loading={busyMut.isPending} block>
-                Send busy notice
-              </Button>
+              <Popconfirm
+                title="Send the busy notice?"
+                description="It goes to every client with an open order, straight away, and can't be recalled."
+                okText="Send busy notice"
+                onConfirm={() => busyMut.mutate({})}
+              >
+                <Button icon={<NotificationOutlined />} loading={busyMut.isPending} block>
+                  Send busy notice
+                </Button>
+              </Popconfirm>
             }
           />
         </Col>
@@ -223,7 +241,9 @@ export default function Broadcasts() {
           <h2 id="history-title" className="braq-panel-title">Sent broadcasts</h2>
           {broadcasts.length > 0 && <span className="braq-pill">{broadcasts.length}</span>}
         </div>
-        <Table
+        {historyError ? (
+          <ErrorState title="Could not load sent broadcasts" error={historyError} onRetry={refetchHistory} />
+        ) : <Table
           dataSource={broadcasts}
           columns={columns}
           rowKey="id"
@@ -232,7 +252,7 @@ export default function Broadcasts() {
           scroll={{ x: 'max-content' }}
           pagination={{ pageSize: 20, showSizeChanger: false, hideOnSinglePage: true }}
           locale={{ emptyText: 'No broadcasts sent yet. Messages you send from this page will be listed here.' }}
-        />
+        />}
       </section>
 
       {/* Custom broadcast modal */}
@@ -339,17 +359,15 @@ export default function Broadcasts() {
         width={480}
       >
         <Alert type="warning" showIcon
-          message="Every client with an active order gets a personalised WhatsApp about the delay."
+          message="Every non-retail client (schools, companies, churches and other accounts) with an active order gets the standard WhatsApp delay message — one per order. It goes out straight away and can't be recalled."
           style={{ margin: '4px 0 16px' }} />
-        <Form form={delayForm} layout="vertical" onFinish={(v) => delayMut.mutate(v)}>
-          <Form.Item name="reason" label="Reason for the delay">
-            <Input.TextArea rows={3} placeholder="e.g. Our fabric supplier is about 5 working days behind." />
-          </Form.Item>
+        {/* The message is the standard delay template: there is nothing to type. */}
+        <Form form={delayForm} layout="vertical" onFinish={() => delayMut.mutate({})}>
           <Form.Item style={{ textAlign: 'right', marginBottom: 0 }}>
             <Space wrap>
               <Button onClick={() => setDelayOpen(false)}>Cancel</Button>
               <Button danger htmlType="submit" loading={delayMut.isPending} icon={<ClockCircleOutlined />}>
-                Send to clients with active orders
+                Send to non-retail clients with active orders
               </Button>
             </Space>
           </Form.Item>

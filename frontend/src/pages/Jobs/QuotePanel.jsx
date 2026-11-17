@@ -332,9 +332,10 @@ export default function QuotePanel({ quotation, draft, editable }) {
   const { items, setItems, derived, blocker } = draft
   const totals = useTotals(derived)
 
+  // Only products still on sale can be quoted.
   const { data: products = [] } = useQuery({
-    queryKey: qk.products({}),
-    queryFn: () => listProducts({}),
+    queryKey: qk.products({ activeOnly: true }),
+    queryFn: () => listProducts({ activeOnly: true }),
     enabled: editable,
     select: (d) => d?.products ?? [],
   })
@@ -541,7 +542,7 @@ export default function QuotePanel({ quotation, draft, editable }) {
                   <div style={{ borderTop: '1px solid var(--line-2)', paddingTop: 16, display: 'flex', flexWrap: 'wrap', gap: '12px 28px', alignItems: 'flex-end' }}>
                     <div style={{ flex: '0 1 200px', minWidth: 160 }}>
                       <label htmlFor={`${fid}-price`} style={LABEL}>Unit price</label>
-                      <InputNumber id={`${fid}-price`} min={0} step={0.5} prefix="R" style={{ width: '100%' }} value={item.unitPrice}
+                      <InputNumber id={`${fid}-price`} min={0} step={0.5} precision={2} prefix="R" style={{ width: '100%' }} value={item.unitPrice}
                         onChange={(v) => { const n = Number(v); updateItem(idx, { unitPrice: Number.isFinite(n) && n > 0 ? n : 0 }) }} />
                     </div>
                     {branded && (

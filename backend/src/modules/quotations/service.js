@@ -87,7 +87,12 @@ export function calcTotals(lineItems) {
 }
 
 // ── Build a quotation from a free-text request, grounded in the catalog ───────
-export async function createFromFreeText(clientId, freeText, { conversationId = null } = {}) {
+export async function createFromFreeText(clientId, freeText, { conversationId = null, sourceEventId = null } = {}) {
+  // A replayed bot turn (same inbound event) gets the quotation it already created —
+  // no second quotation, no second AI call (DAT-2).
+  const earlier = await quotationForEvent(sourceEventId);
+  if (earlier) return replayedQuotation(earlier);
+
   const products    = await listProducts({ activeOnly: true });
   const parsed      = await parseQuotationRequest(freeText, { products });
   const productsById = new Map(products.map(p => [p.id, p]));
@@ -97,7 +102,10 @@ export async function createFromFreeText(clientId, freeText, { conversationId = 
 
   for (const item of parsed.items || []) {
     const product = productsById.get(item.productId);
-    if (!product || !item.quantity || item.quantity <= 0) {
+    // AI output is only a reading of the client's words: a line is auto-priced only
+    // when it is a whole, plausible quantity whose sizes (if given) add up to it.
+    // Anything else goes to a consultant instead of an automatic quote (FIN-4).
+    if (!product || !isPlausibleQuantity(item.quantity) || !sizesMatch(item.sizes, item.quantity)) {
       unmatchedDescriptions.push(item.description || `${item.quantity ?? '?'} × unrecognised item`);
       continue;
     }
@@ -162,13 +170,46 @@ export async function createFromFreeText(clientId, freeText, { conversationId = 
 
   const { rows } = await query(
     `INSERT INTO quotations
-       (reference, client_id, status, line_items, subtotal, vat, total, currency, sla_remind_at, notes, conversation_id)
-     VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10)
+       (reference, client_id, status, line_items, subtotal, vat, total, currency, sla_remind_at, notes, conversation_id, source_event_id)
+     VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (source_event_id) WHERE source_event_id IS NOT NULL DO NOTHING
      RETURNING *`,
-    [reference, clientId, JSON.stringify(allItems), subtotal, vatAmount, total, currency, slaRemindAt, freeText, conversationId]
+    [reference, clientId, JSON.stringify(allItems), subtotal, vatAmount, total, currency, slaRemindAt, freeText, conversationId, sourceEventId]
   );
+  if (!rows.length) return replayedQuotation(await quotationForEvent(sourceEventId)); // lost a race with itself
 
   return { quotation: rows[0], unmatchedText: unmatchedDescriptions };
+}
+
+/** Largest quantity per line a quote is auto-sent for; larger orders are priced by a consultant. */
+export const MAX_AUTO_QUANTITY = 5000;
+
+/** A whole number of items, 1..MAX_AUTO_QUANTITY. */
+export const isPlausibleQuantity = (q) => Number.isInteger(q) && q > 0 && q <= MAX_AUTO_QUANTITY;
+
+/** No size breakdown, or one whose whole-number quantities add up to the line quantity. */
+export function sizesMatch(sizes, quantity) {
+  if (!Array.isArray(sizes) || sizes.length === 0) return true;
+  if (!sizes.every((s) => s && Number.isInteger(s.qty) && s.qty > 0)) return false;
+  return sizes.reduce((n, s) => n + s.qty, 0) === quantity;
+}
+
+/** The quotation a bot turn for this inbound event already created, or null. */
+export async function quotationForEvent(sourceEventId, db = { query }) {
+  if (sourceEventId == null) return null;
+  const { rows } = await db.query('SELECT * FROM quotations WHERE source_event_id = $1', [sourceEventId]);
+  return rows[0] || null;
+}
+
+/**
+ * createFromFreeText's result for an existing quotation. The original list of
+ * unmatched descriptions is not stored: the lines still awaiting a price stand in
+ * for it, and `replayed` tells the bot never to auto-send a draft on a replay.
+ */
+function replayedQuotation(quotation) {
+  const items = Array.isArray(quotation.line_items) ? quotation.line_items : [];
+  const unmatchedText = items.filter((i) => i.priceConfirmed === false || !i.productId).map((i) => i.name).filter(Boolean);
+  return { quotation, unmatchedText, replayed: true };
 }
 
 // ── Staff start a quote (from a chat or the client page) ─────────────────────
@@ -263,18 +304,18 @@ export async function saveDraftQuotation(id, { lineItems, notes, validUntil } = 
  * dashboard "new order" without a quote). Runs on the caller's transaction.
  * @returns the quotations row
  */
-export async function createAcceptedQuotation(tx, { clientId, lineItems, conversationId = null, actorId = null, autoQuoted = false, notes = null, source }) {
+export async function createAcceptedQuotation(tx, { clientId, lineItems, conversationId = null, actorId = null, autoQuoted = false, notes = null, source, sourceEventId = null }) {
   const items = (lineItems || []).map((i) => ({ ...priceLineItem(i), priceConfirmed: true }));
   const { subtotal, vatAmount, total } = calcTotals(items);
   const reference = await nextQuotationRef(tx);
   const { rows } = await tx.query(
     `INSERT INTO quotations
        (reference, client_id, status, line_items, subtotal, vat, total, currency, notes, conversation_id,
-        approved_by, approved_at, valid_until, auto_quoted, assigned_staff_id, claimed_at)
+        approved_by, approved_at, valid_until, auto_quoted, assigned_staff_id, claimed_at, source_event_id)
      VALUES ($1,$2,'accepted',$3,$4,$5,$6,'ZAR',$7,$8,$9,NOW(),${NEW_VALID_UNTIL_SQL},$10,$9,
-             CASE WHEN $9::uuid IS NULL THEN NULL ELSE NOW() END)
+             CASE WHEN $9::uuid IS NULL THEN NULL ELSE NOW() END, $11)
      RETURNING *`,
-    [reference, clientId, JSON.stringify(items), subtotal, vatAmount, total, notes, conversationId, actorId, autoQuoted]
+    [reference, clientId, JSON.stringify(items), subtotal, vatAmount, total, notes, conversationId, actorId, autoQuoted, sourceEventId]
   );
   await recordJobEvent(tx, { quotationId: rows[0].id, type: 'quotation.accepted', actorId, data: { source } });
   return rows[0];
@@ -501,6 +542,10 @@ export async function updateQuotationStatus(id, status, { actorId = null, tx = n
       : '';
 
   const run = async (c) => {
+    // Lock first (FIN-11): a conversion to an order holds this row; waiting here means
+    // the UPDATE below — a new statement, a new snapshot — sees the order it created,
+    // so "decline" / "revise" can never land on a quote that just became an order.
+    await c.query('SELECT id FROM quotations WHERE id = $1 FOR UPDATE', [id]);
     const { rows } = await c.query(
       `UPDATE quotations q SET status = $1, updated_at = NOW()${extraSet}
        WHERE q.id = $2 AND ${conditions.join(' AND ')}

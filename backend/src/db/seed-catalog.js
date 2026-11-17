@@ -1,5 +1,7 @@
+import { config } from '../core/config.js';
 import { pool, query } from '../core/db.js';
 import { logger } from '../core/logger.js';
+import { productionReason, configTarget } from './safety.js';
 
 // category must be a product_category enum value (see migrate.js / products.controller.js):
 // school_wear | knitwear | medical_wear | outdoor_wear | corporate_wear | safety_wear
@@ -17,6 +19,9 @@ const PLACEHOLDER_PRODUCTS = [
 ];
 
 async function seedCatalog() {
+  // Placeholder products are priced R 0 — on production they would be auto-quoted at R 0.00.
+  const prod = productionReason(configTarget(config));
+  if (prod) throw new Error(`Refusing to seed the placeholder catalog: ${prod}. Load real products through the dashboard.`);
   for (const p of PLACEHOLDER_PRODUCTS) {
     const existing = await query(
       'SELECT id FROM products WHERE category = $1 AND name = $2',

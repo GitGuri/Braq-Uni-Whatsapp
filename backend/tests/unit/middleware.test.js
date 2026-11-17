@@ -80,6 +80,31 @@ describe('requireAuth', () => {
     });
   }
 
+  const uuidStaff = { ...staff, id: '11111111-2222-4333-8444-555555555555' };
+
+  test('SEC-5: a valid token while the database is unreachable → 503 (retryable), not 401 (which signs staff out)', async () => {
+    db.reset();
+    db.on(/FROM staff/, () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }); });
+    const res = fakeRes();
+    let nextCalled = 0;
+    await auth.requireAuth({ headers: { authorization: `Bearer ${auth.generateToken(uuidStaff)}` } }, res, () => { nextCalled++; });
+    assert.equal(res.statusCode, 503);
+    assert.match(res.body.error, /temporarily unavailable/);
+    assert.equal(nextCalled, 0);
+    db.reset();
+  });
+
+  test('a valid token for an active account → next() with req.staff from the database', async () => {
+    db.reset();
+    db.on(/FROM staff/, { rows: [{ id: 's1', email: 'a@b.co', name: 'Ann', role: 'manager' }] });
+    const req = { headers: { authorization: `Bearer ${auth.generateToken(uuidStaff)}` } };
+    let nextCalled = 0;
+    await auth.requireAuth(req, fakeRes(), () => { nextCalled++; });
+    assert.equal(nextCalled, 1);
+    assert.equal(req.staff.role, 'manager', 'role comes from the database, not the token');
+    db.reset();
+  });
+
   test('generateToken signs only id/email/role/name with configured expiry', () => {
     const p = jwt.verify(auth.generateToken(staff), 'test');
     assert.deepEqual(Object.keys(p).sort(), ['email', 'exp', 'iat', 'id', 'name', 'role']);

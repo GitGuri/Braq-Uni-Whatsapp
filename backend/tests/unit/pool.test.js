@@ -21,7 +21,7 @@ class FakePool {
         if (state.failOn && state.failOn.test(text)) throw new Error(`client boom on ${text}`);
         return { rows: [{ v: 1 }] };
       },
-      release: () => { state.released++; },
+      release: (err) => { state.released++; state.releasedWith = err; },
     };
   }
 }
@@ -41,6 +41,43 @@ describe('pool configuration', () => {
     assert.equal(state.poolOpts.idleTimeoutMillis, 10000);
     assert.equal(state.poolOpts.allowExitOnIdle, true);
     assert.equal(state.poolOpts.host, undefined);
+  });
+
+  test('connection and statement timeouts are set (a hung connection never outlives a job lock)', () => {
+    assert.equal(state.poolOpts.connectionTimeoutMillis, 15000);
+    assert.equal(state.poolOpts.statement_timeout, 120000);
+  });
+
+  test('SEC-3 sslOptions: verify by default in production, no-verify elsewhere, disable on request', () => {
+    assert.deepEqual(pool.sslOptions({ env: 'production' }), { rejectUnauthorized: true });
+    assert.deepEqual(pool.sslOptions({ env: 'development' }), { rejectUnauthorized: false });
+    assert.deepEqual(pool.sslOptions({ env: 'test' }), { rejectUnauthorized: false });
+    assert.equal(pool.sslOptions({ env: 'development', mode: 'disable' }), false);
+    assert.deepEqual(pool.sslOptions({ env: 'development', mode: 'verify' }), { rejectUnauthorized: true });
+    assert.throws(() => pool.sslOptions({ env: 'production', mode: 'sometimes' }), /DB_SSL_MODE/);
+  });
+
+  test('SEC-3 the CA is taken from PEM text (escaped newlines allowed) or a file', async () => {
+    const pem = '-----BEGIN CERTIFICATE-----\\nABC\\n-----END CERTIFICATE-----';
+    const opts = pool.sslOptions({ env: 'production', ca: pem });
+    assert.equal(opts.rejectUnauthorized, true);
+    assert.equal(opts.ca, '-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----');
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const file = path.join(os.tmpdir(), `ca-${process.pid}.pem`);
+    fs.writeFileSync(file, 'PEMFILE');
+    try {
+      assert.equal(pool.sslOptions({ env: 'production', ca: file }).ca, 'PEMFILE');
+    } finally {
+      fs.unlinkSync(file);
+    }
+  });
+
+  test('SEC-3 ssl* parameters are removed from the URL so DB_SSL_MODE decides', () => {
+    assert.equal(pool.stripSslParams('postgresql://u:p@h:5432/db?sslmode=disable&family=4'), 'postgresql://u:p@h:5432/db?family=4');
+    assert.equal(pool.stripSslParams('postgresql://u:p@h:5432/db?family=4'), 'postgresql://u:p@h:5432/db?family=4');
+    assert.equal(pool.stripSslParams(''), '');
   });
 
   test('pool error handler is registered and does not throw', () => {
@@ -87,6 +124,18 @@ describe('withTransaction()', () => {
     state.failOn = /^(BEGIN|ROLLBACK)$/;
     await assert.rejects(pool.withTransaction(async () => 1), /client boom/);
     assert.equal(state.released, 1);
+  });
+
+  test('Q-4: a failing ROLLBACK keeps the ORIGINAL error and discards the connection (release(err))', async () => {
+    state.failOn = /^(INSERT 9|ROLLBACK)$/;
+    await assert.rejects(pool.withTransaction(async (tx) => { await tx.query('INSERT 9'); }), /client boom on INSERT 9/);
+    assert.equal(state.released, 1);
+    assert.match(String(state.releasedWith?.message), /ROLLBACK/, 'broken client is destroyed, not reused');
+  });
+
+  test('a normal rollback returns the connection to the pool (release())', async () => {
+    await assert.rejects(pool.withTransaction(async () => { throw new Error('app'); }), /app/);
+    assert.equal(state.releasedWith, undefined);
   });
 });
 

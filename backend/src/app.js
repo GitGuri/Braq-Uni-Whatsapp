@@ -6,6 +6,7 @@ import { config } from './core/config.js';
 import { logger, requestContext } from './core/logger.js';
 import { errorMiddleware } from './core/errors.js';
 import { PgRateLimitStore } from './core/rateLimitStore.js';
+import { catchAsyncRoutes } from './core/http.js';
 
 // Routers
 import { webhookRouter }        from './modules/webhook/routes.js';
@@ -69,6 +70,12 @@ export function createApp() {
   });
 
   // ── Routes ──────────────────────────────────────────────────────────────────
+  // Every handler's rejection / throw reaches errorMiddleware (never an
+  // unhandled rejection that would take the process down).
+  for (const r of [webhookRouter, ordersRouter, staffRouter, clientsRouter, productsRouter, quotationsRouter,
+    ticketsRouter, conversationsRouter, settingsRouter, analyticsRouter, broadcastsRouter, purchaseOrdersRouter,
+    schoolCatalogRouter, jobsRouter, metaRouter]) catchAsyncRoutes(r);
+
   app.use('/webhook',             webhookRouter);
   app.use('/api/orders',          ordersRouter);
   app.use('/api/staff',           staffRouter);
@@ -86,7 +93,7 @@ export function createApp() {
   app.use('/api/meta',            metaRouter);
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'Braq Connect API', env: config.env, timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', service: 'Braq Connect API', timestamp: new Date().toISOString() });
   });
 
   app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));

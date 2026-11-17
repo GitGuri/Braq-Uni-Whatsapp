@@ -279,9 +279,9 @@ describe('quotations', () => {
     assert.equal((await api('GET', `/api/quotations/${crypto.randomUUID()}`, { token: adminToken })).status, 404);
   });
 
-  test('PDF of a draft quotation is not exposed (404)', async () => {
+  test('AUTH-4: the quotation PDF is never public — 401 without a staff token (drafts included)', async () => {
     const r = await api('GET', `/api/quotations/${quote.id}/pdf`, { raw: true });
-    assert.equal(r.status, 404);
+    assert.equal(r.status, 401);
   });
 
   test('claim: first consultant wins, second gets 409 naming the claimer; unknown → 404', async () => {
@@ -344,9 +344,11 @@ describe('quotations', () => {
     assert.equal(u.status, 404);
   });
 
-  test('PDF endpoint (public) returns a valid application/pdf document', async () => {
-    const r = await api('GET', `/api/quotations/${quote.id}/pdf`, { raw: true });
+  test('PDF endpoint (staff) returns a valid application/pdf document, not cacheable', async () => {
+    assert.equal((await api('GET', `/api/quotations/${quote.id}/pdf`, { raw: true })).status, 401, 'no token → 401');
+    const r = await api('GET', `/api/quotations/${quote.id}/pdf`, { raw: true, token: adminToken });
     assert.equal(r.status, 200);
+    assert.equal(r.headers.get('cache-control'), 'private, no-store');
     assert.match(r.headers.get('content-type'), /^application\/pdf/);
     assert.match(r.headers.get('content-disposition'), new RegExp(`${quote.reference}\\.pdf`));
     assert.equal(r.buf.subarray(0, 5).toString('latin1'), '%PDF-');
@@ -355,9 +357,9 @@ describe('quotations', () => {
   });
 
   test('PDF of an unknown quotation → 404; quotation with no line items → 422', async () => {
-    assert.equal((await api('GET', `/api/quotations/${crypto.randomUUID()}/pdf`, { raw: true })).status, 404);
+    assert.equal((await api('GET', `/api/quotations/${crypto.randomUUID()}/pdf`, { raw: true, token: adminToken })).status, 404);
     const empty = await makeQuote({ clientId: client.id, status: 'sent', lineItems: [] });
-    assert.equal((await api('GET', `/api/quotations/${empty.id}/pdf`, { raw: true })).status, 422);
+    assert.equal((await api('GET', `/api/quotations/${empty.id}/pdf`, { raw: true, token: adminToken })).status, 422);
   });
 
   test('status update: missing/invalid → 400, unknown id → 404, accepted → 200', async () => {

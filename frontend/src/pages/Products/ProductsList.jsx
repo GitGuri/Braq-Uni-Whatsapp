@@ -9,6 +9,7 @@ import { listProducts, createProduct, updateProduct } from '../../api/products.j
 import { errorMessage } from '../../utils/errorMessage.js'
 import { useCan } from '../../lib/useCan.js'
 import { money } from '../../lib/format.js'
+import ErrorState from '../../components/ErrorState.jsx'
 
 const CATEGORIES = [
   { value: 'school_wear',   label: 'School wear' },
@@ -79,7 +80,7 @@ function ProductModal({ open, onClose, initial, onSave, loading }) {
         </Form.Item>
 
         <Form.Item label="Price per unit" name="price" rules={[{ required: true }]}>
-          <InputNumber min={0} step={0.5} prefix="R" style={{ width: '100%' }} />
+          <InputNumber min={0} step={0.5} precision={2} prefix="R" style={{ width: '100%' }} />
         </Form.Item>
 
         <Form.Item label="Sizes" name="sizes" help="Separate sizes with commas, e.g. XS, S, M, L, XL or 6, 8, 10, 12">
@@ -107,7 +108,7 @@ export default function ProductsList() {
   const [adding,  setAdding]    = useState(false)
   const [msgApi, ctx] = message.useMessage()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['products'],
     queryFn:  () => listProducts({}),
   })
@@ -221,7 +222,10 @@ export default function ProductsList() {
       </div>
 
       <section className="braq-panel" style={{ padding: '0 16px 12px', minWidth: 0 }}>
-        <Tabs items={tabItems} />
+        {/* A failed load is not an empty catalogue. */}
+        {error
+          ? <div style={{ paddingTop: 12 }}><ErrorState title="Could not load products" error={error} onRetry={refetch} /></div>
+          : <Tabs items={tabItems} />}
       </section>
 
       <ProductModal

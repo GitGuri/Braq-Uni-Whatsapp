@@ -7,7 +7,7 @@
  * job-related queries (job, board, lists, dashboard, inbox counts) and the page
  * stays put, showing the new next step.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getJob } from '../../api/jobs.js'
 import { approveQuotation, updateQuotationStatus, resendQuotation, claimQuotation } from '../../api/quotations.js'
@@ -19,6 +19,7 @@ import { createTicket, updateTicket } from '../../api/tickets.js'
 import { actionError } from '../../api/adapt.js'
 import { qk, useJobMutation } from '../../lib/queryKeys.js'
 import { money } from '../../lib/format.js'
+import { newIdempotencyKey } from '../../lib/idempotency.js'
 
 export function useJob(quotationId) {
   return useQuery({
@@ -44,6 +45,20 @@ const num = (v) => (v === undefined || v === null || v === '' ? undefined : Numb
 
 /** "Start production now" ticked on the action → { estimatedCompletion? } for the API, else undefined. */
 const startNow = (v) => (v.startProduction ? clean({ estimatedCompletion: v.estimatedCompletion }) : undefined)
+
+/**
+ * Stage advances (POST /orders/:id/advance) → the stage the user means to reach.
+ * Sent as `expect`, so a stale page or a retried click is refused (409 STALE)
+ * instead of skipping the order on a stage. Only these actions accept `override`.
+ */
+export const ADVANCE_EXPECT = {
+  start_production: 'in_production',
+  mark_ready: 'ready',
+  mark_collected: 'completed',
+}
+
+/** Actions that record a payment (POST /orders/:id/payments) and carry an idempotency key. */
+export const PAYMENT_ACTIONS = ['record_deposit', 'record_balance', 'record_payment']
 
 /**
  * Perform one next action.
@@ -77,11 +92,14 @@ export function performAction(job, action, v = {}, ctx = {}) {
     case 'record_deposit':
     case 'record_balance':
     case 'record_payment':
+      // ctx.idempotencyKey: one key per submission (see useJobActions) — a retry after a
+      // timeout returns the first payment instead of recording a second one.
       return recordPayment(o.id, clean({
         type: v.type || (action.key === 'record_deposit' ? 'deposit' : 'balance'),
         amount: num(v.amount),
         notes: v.notes,
         startProduction: startNow(v),
+        idempotencyKey: ctx.idempotencyKey,
       }))
     case 'send_proof':
       return sendProof(o.id, clean({ proofUrl: v.proofUrl, notes: v.notes }))
@@ -100,6 +118,7 @@ export function performAction(job, action, v = {}, ctx = {}) {
         // Mark collected: the balance taken at the counter is recorded in the same step.
         payment: action.key === 'mark_collected' && num(v.balanceAmount) > 0 ? { amount: num(v.balanceAmount), type: 'balance' } : undefined,
         override: ctx.override,
+        expect: ADVANCE_EXPECT[action.key],
       }))
     case 'open_ticket':
       return createTicket(clean({ clientId: q?.client_id ?? o?.client_id, orderId: o?.id, category: v.category, description: v.description }))
@@ -131,9 +150,12 @@ export function successMessage(action, result, values = {}) {
       return { type: 'success', text: ref ? `PO recorded — order ${ref} created` : 'Purchase order recorded' }
     }
     case 'record_deposit':
+      if (result?.replayed) return { type: 'success', text: `Already recorded — deposit of ${money(values.amount)}` }
       return { type: 'success', text: `Deposit of ${money(values.amount)} recorded${result?.advanced ? ' — production started' : ''}` }
     case 'record_balance':
-    case 'record_payment': return { type: 'success', text: `Payment of ${money(values.amount)} recorded` }
+    case 'record_payment':
+      if (result?.replayed) return { type: 'success', text: `Already recorded — payment of ${money(values.amount)}` }
+      return { type: 'success', text: `Payment of ${money(values.amount)} recorded` }
     case 'send_proof': return { type: 'success', text: 'Proof sent to the client on WhatsApp' }
     case 'mark_proof_approved':
       return { type: 'success', text: result?.order?.stage === 'in_production' ? 'Design approved — production started' : 'Design approved' }
@@ -157,17 +179,30 @@ export function successMessage(action, result, values = {}) {
  */
 export function useJobActions(job) {
   const [pendingKey, setPendingKey] = useState(null)
+  // Payment idempotency keys still in play, per order + action: kept while a
+  // submission failed (so retrying it reuses the key), dropped after success.
+  const payKeys = useRef({})
   const mutation = useJobMutation({
     mutationFn: ({ action, values, ctx }) => performAction(job, action, values, ctx),
   })
 
   const run = async (action, values = {}, ctx = {}) => {
     setPendingKey(action.key + (action.ticketId ? `:${action.ticketId}` : ''))
+    // A caller that manages its own key (e.g. the "Record other payment" dialog) passes ctx.idempotencyKey.
+    const slot = PAYMENT_ACTIONS.includes(action.key) && !ctx.idempotencyKey ? `${job?.order?.id}:${action.key}` : null
+    if (slot) {
+      payKeys.current[slot] ??= newIdempotencyKey()
+      ctx = { ...ctx, idempotencyKey: payKeys.current[slot] }
+    }
     try {
       const result = await mutation.mutateAsync({ action, values, ctx })
+      if (slot) delete payKeys.current[slot]
       return { ok: true, result, message: successMessage(action, result, values) }
     } catch (err) {
-      return { ok: false, error: actionError(err) }
+      const error = actionError(err)
+      // The key was used for different details: the server says refresh and record again — with a new key.
+      if (slot && error.code === 'IDEMPOTENCY_MISMATCH') delete payKeys.current[slot]
+      return { ok: false, error }
     } finally {
       setPendingKey(null)
     }

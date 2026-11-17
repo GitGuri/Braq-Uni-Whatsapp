@@ -14,6 +14,7 @@ import { useTheme } from '../theme/ThemeContext.jsx'
 import { getUnreadCount } from '../api/conversations.js'
 import { useCan } from '../lib/useCan.js'
 import { qk } from '../lib/queryKeys.js'
+import ErrorBoundary from '../components/ErrorBoundary.jsx'
 
 const SIDEBAR_W  = 248
 const SIDEBAR_SM = 68
@@ -210,9 +211,12 @@ export default function DashboardLayout() {
         </header>
 
         <main key={location.pathname} className="braq-content braq-route">
-          <Suspense fallback={<div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>}>
-            <Outlet />
-          </Suspense>
+          {/* A page that crashes (or whose code fails to load) shows a Reload card; other pages still work. */}
+          <ErrorBoundary key={location.pathname}>
+            <Suspense fallback={<div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
     </div>

@@ -134,6 +134,20 @@ describe('claim / complete / fail / reclaim / prune', () => {
     assert.equal((await job(b)).status, 'dead');
   });
 
+  test('Q-1: a slow worker finishing a job that was reclaimed and re-claimed elsewhere cannot overwrite the new run', async () => {
+    const id = await queue.enqueue(t.db.pool, 'x', {});
+    const [slow] = await queue.claimBatch(t.db.pool, 'slow-worker', 1);
+    await t.query(`UPDATE jobs SET locked_at = now() - interval '10 minutes'`);
+    await queue.reclaimStale(t.db.pool);
+    const [fresh] = await queue.claimBatch(t.db.pool, 'fresh-worker', 1);
+    assert.equal(Number(fresh.id), id);
+    assert.equal(await queue.complete(t.db.pool, slow.id, slow.locked_by), false, 'late complete refused');
+    assert.equal(await queue.fail(t.db.pool, slow, new Error('late')), 'lost');
+    assert.deepEqual([(await job(id)).status, (await job(id)).locked_by], ['running', 'fresh-worker']);
+    assert.equal(await queue.complete(t.db.pool, fresh.id, fresh.locked_by), true);
+    assert.equal((await job(id)).status, 'done');
+  });
+
   test('prune deletes done jobs older than 14 days only', async () => {
     const old = await queue.enqueue(t.db.pool, 'x', {});
     const fresh = await queue.enqueue(t.db.pool, 'x', {});
@@ -251,6 +265,61 @@ describe('handlers', () => {
     await assert.rejects(run('whatsapp.send', { to: '27999999999', body: 'again' }), /WhatsApp send failed/);
   });
 
+  test('MSG-3 whatsapp.send: a Meta 400 (invalid parameter) dead-letters at once and marks the inbox row failed; a 500 is retried', async () => {
+    const client = await t.factory.client();
+    const convo = await t.factory.conversation({ client_id: client.id });
+    const notif = await t.load('modules/notifications/whatsapp.js');
+    const db = await t.load('core/db.js');
+    await db.withTransaction((tx) => notif.queueRecordedText(tx, { to: client.whatsapp_number, body: 'bad', clientId: client.id, conversationId: convo.id }));
+    await db.withTransaction((tx) => notif.queueRecordedText(tx, { to: client.whatsapp_number, body: 'next reply', clientId: client.id, conversationId: convo.id }));
+    t.wa.failNext(1, { status: 400, error: { message: '(#100) Invalid parameter', code: 100 } });
+    const out = await t.drainJobs();
+    assert.equal(out.dead, 1, 'no 8× retry');
+    assert.deepEqual(t.wa.texts(client.whatsapp_number), ['next reply'], 'the client\'s next message is not held up');
+    assert.deepEqual((await t.query(`SELECT body, status FROM messages WHERE conversation_id = $1 ORDER BY created_at, id`, [convo.id])).rows,
+      [{ body: 'bad', status: 'failed' }, { body: 'next reply', status: 'sent' }]);
+
+    t.wa.failNext(1); // 500 outage
+    await assert.rejects(run('whatsapp.send', { to: client.whatsapp_number, body: 'retry me' }), (e) => e.permanent !== true);
+  });
+
+  test('MSG-5 broadcast: a send handled twice (retry after a crash) is counted once; a lost count is recovered', async () => {
+    const client = await t.factory.client();
+    await t.factory.conversation({ client_id: client.id });
+    const { id: broadcastId } = await t.one(
+      `INSERT INTO broadcasts (message_type, body, recipient_count, status, sent_count, failed_count)
+       VALUES ('custom:all_clients', 'Hi', 1, 'sending', 0, 0) RETURNING id`);
+    const { job: j } = await run('whatsapp.send', { to: client.whatsapp_number, body: 'Hi', broadcastId });
+    await handlers['whatsapp.send'](j.payload, { job: j }); // the retry
+    let b = await t.one('SELECT sent_count, failed_count, status FROM broadcasts WHERE id = $1', [broadcastId]);
+    assert.deepEqual([b.sent_count, b.failed_count, b.status], [1, 0, 'done']);
+    assert.equal(t.wa.sent.length, 1, 'sent once');
+
+    // Count lost after the send (crash between send and count): the retry counts it, once.
+    await t.query('DELETE FROM broadcast_outcomes'); await t.query('UPDATE broadcasts SET sent_count = 0, status = $2 WHERE id = $1', [broadcastId, 'sending']);
+    await handlers['whatsapp.send'](j.payload, { job: j });
+    b = await t.one('SELECT sent_count, status FROM broadcasts WHERE id = $1', [broadcastId]);
+    assert.deepEqual([b.sent_count, b.status], [1, 'done']);
+    assert.equal(t.wa.sent.length, 1, 'still sent once');
+  });
+
+  test('MSG-5 settleDeadSends: a send dead-lettered by a crash marks its inbox row failed and counts its broadcast failed, once', async () => {
+    const send = await t.load('workers/handlers/whatsapp.send.js');
+    const client = await t.factory.client();
+    const convo = await t.factory.conversation({ client_id: client.id });
+    const { id: broadcastId } = await t.one(
+      `INSERT INTO broadcasts (message_type, body, recipient_count, status, sent_count, failed_count)
+       VALUES ('busy', 'x', 1, 'sending', 0, 0) RETURNING id`);
+    const jobId = await queue.enqueue(t.db.pool, 'whatsapp.send', { to: client.whatsapp_number, body: 'x', broadcastId, recorded: true });
+    await t.query(`INSERT INTO messages (conversation_id, client_id, direction, body, job_id, status) VALUES ($1, $2, 'outbound', 'x', $3, 'queued')`, [convo.id, client.id, jobId]);
+    await t.query(`UPDATE jobs SET status = 'dead' WHERE id = $1`, [jobId]);
+    assert.deepEqual(await send.settleDeadSends(), { messages: 1, broadcasts: 1 });
+    assert.deepEqual(await send.settleDeadSends(), { messages: 0, broadcasts: 0 }, 'idempotent');
+    assert.equal((await t.one('SELECT status FROM messages WHERE job_id = $1', [jobId])).status, 'failed');
+    const b = await t.one('SELECT failed_count, status FROM broadcasts WHERE id = $1', [broadcastId]);
+    assert.deepEqual([b.failed_count, b.status], [1, 'done']);
+  });
+
   test('whatsapp.send: invalid payload is a permanent error', async () => {
     await assert.rejects(run('whatsapp.send', { kind: 'text', body: 'x' }), (e) => e.permanent === true);
     await assert.rejects(run('whatsapp.send', { to: '27', kind: 'image' }), (e) => e.permanent === true);
@@ -273,14 +342,41 @@ describe('handlers', () => {
     await t.query(`UPDATE quotations SET notified_at = now() - interval '1 hour' WHERE id = $1`, [fresh.id]);
 
     const { result } = await run('reminder.scan', {});
-    assert.deepEqual(result, { quotations: 1, tickets: 0, conversations: 0 });
+    assert.deepEqual(result, { quotations: 1, tickets: 0, conversations: 0, unansweredChats: 0 });
     await t.drainJobs(); // the reminder email is queued (email.send)
     assert.equal(t.email.sent.length, 1);
     assert.match(t.email.sent[0].subject, /Reminder — still unclaimed/);
     assert.ok((await t.one('SELECT staff_reminder_sent_at FROM quotations WHERE id = $1', [q.id])).staff_reminder_sent_at);
 
     const { result: second } = await run('reminder.scan', {});
-    assert.deepEqual(second, { quotations: 0, tickets: 0, conversations: 0 });
+    assert.deepEqual(second, { quotations: 0, tickets: 0, conversations: 0, unansweredChats: 0 });
+  });
+
+  test('MSG-2 reminder.scan: a consultant-owned chat whose client waited 2h+ emails the owner once; a reply clears it', async () => {
+    const owner = await t.factory.staff({ role: 'consultant', email: 'owner@test.local' });
+    await t.factory.staff({ role: 'consultant', email: 'other@test.local' });
+    const client = await t.factory.client({ name: 'Forgotten Co' });
+    const convo = await t.factory.conversation({ client_id: client.id, state: 'consultant_active' });
+    await t.query('UPDATE conversations SET assigned_staff_id = $2 WHERE id = $1', [convo.id, owner.id]);
+    const say = (direction, ago) => t.query(
+      `INSERT INTO messages (conversation_id, client_id, direction, body, created_at) VALUES ($1, $2, $3, 'x', now() - $4::interval)`,
+      [convo.id, client.id, direction, ago]);
+    await say('outbound', '5 hours');
+    await say('inbound', '3 hours'); // client waiting since 3h
+
+    const { result } = await run('reminder.scan', {});
+    assert.equal(result.unansweredChats, 1);
+    await t.drainJobs();
+    assert.deepEqual(t.email.sent.map((e) => e.to), [['owner@test.local']], 'the owner, not everyone');
+    assert.match(t.email.sent[0].subject, /waiting for your reply — Forgotten Co/);
+
+    const { result: again } = await run('reminder.scan', {});
+    assert.equal(again.unansweredChats, 0, 'once per unanswered message');
+
+    await say('inbound', '150 minutes'); // a newer unanswered message → reminded again…
+    await say('outbound', '1 minute');   // …unless the consultant has replied since
+    const { result: replied } = await run('reminder.scan', {});
+    assert.equal(replied.unansweredChats, 0);
   });
 
   test('quotation.expire: persists expired on lapsed sent quotations', async () => {

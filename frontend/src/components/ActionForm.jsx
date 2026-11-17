@@ -1,6 +1,6 @@
 import { Form, Input, InputNumber, Select, Button, Popconfirm, Checkbox } from 'antd'
 import { useQuery } from '@tanstack/react-query'
-import { listStaff } from '../api/staff.js'
+import { listStaff, assignableStaff } from '../api/staff.js'
 import { qk } from '../lib/queryKeys.js'
 import { useStatus } from '../lib/status.js'
 import { sentence } from '../lib/format.js'
@@ -24,7 +24,7 @@ export function actionDefaults(action) {
 
 function StaffSelect(props) {
   const { data } = useQuery({ queryKey: qk.staff, queryFn: listStaff })
-  const staff = data?.staff ?? []
+  const staff = assignableStaff(data?.staff ?? [], props.value)
   return <Select allowClear placeholder="Choose a staff member" options={staff.map((s) => ({ value: s.id, label: s.name }))} {...props} />
 }
 

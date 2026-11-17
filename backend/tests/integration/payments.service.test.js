@@ -90,10 +90,16 @@ describe('recordPayment', () => {
 
   test('order with no amounts on record still gets a clean confirmation (currency shown)', async () => {
     const o = await pricedOrder({ deposit_amount: null, balance_amount: null });
-    await svc.recordPayment(o.id, { amount: 250, type: 'deposit', currency: 'USD' });
+    await svc.recordPayment(o.id, { amount: 250, type: 'deposit' });
     await t.drainJobs();
     assertClean(assert, t.wa.texts()[0]);
-    assert.match(t.wa.texts()[0], /USD 250\.00/);
+    assert.match(t.wa.texts()[0], /R 250\.00/);
+  });
+
+  test('FIN-9: a non-ZAR payment is refused (it would be summed into rand totals) — nothing stored', async () => {
+    const o = await pricedOrder({ deposit_amount: null, balance_amount: null });
+    await assert.rejects(svc.recordPayment(o.id, { amount: 250, type: 'deposit', currency: 'USD' }), (e) => e.status === 400);
+    assert.equal((await payments(o.id)).length, 0);
   });
 
   for (const [type, status, balance] of [['full', 'paid_in_full', 0], ['deposit', 'deposit_paid', null]]) {
@@ -172,6 +178,54 @@ describe('recordPayment', () => {
     assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
     assert.equal(results.find((r) => r.status === 'rejected').reason.status, 400);
     assert.equal((await payments(o.id)).length, 1);
+  });
+});
+
+describe('FIN-1 idempotency and audit', () => {
+  const t_ = { withTx: async (fn) => (await t.load('core/db.js')).withTransaction(fn) };
+  test('the same idempotency key twice → one payment, one receipt; the replay returns the first row', async () => {
+    const o = await pricedOrder();
+    const first = await t_.withTx((tx) => svc.recordPaymentTx(tx, o.id, { amount: 300, type: 'deposit', idempotencyKey: 'form-abc-123' }));
+    const again = await t_.withTx((tx) => svc.recordPaymentTx(tx, o.id, { amount: 300, type: 'deposit', idempotencyKey: 'form-abc-123' }));
+    assert.equal(again.replayed, true);
+    assert.equal(again.payment.id, first.payment.id);
+    assert.equal((await payments(o.id)).length, 1);
+    await t.drainJobs();
+    assert.equal(t.wa.texts('27820000002').length, 1, 'one receipt');
+    assert.equal((await orderRow(o.id)).payment_status, 'unpaid', 'R300 of a R600 deposit — status unchanged by the replay');
+  });
+
+  test('concurrent submissions with one key → exactly one row (the second waits on the order lock, then replays)', async () => {
+    const o = await pricedOrder();
+    const results = await Promise.all([1, 2, 3].map(() =>
+      t_.withTx((tx) => svc.recordPaymentTx(tx, o.id, { amount: 200, type: 'deposit', idempotencyKey: 'double-click-1' }))));
+    assert.equal(new Set(results.map((r) => r.payment.id)).size, 1);
+    assert.equal(results.filter((r) => r.replayed).length, 2);
+    assert.equal((await payments(o.id)).length, 1);
+  });
+
+  test('a key reused with different details → 409 IDEMPOTENCY_MISMATCH, nothing new stored', async () => {
+    const o = await pricedOrder();
+    await svc.recordPayment(o.id, { amount: 100, type: 'deposit', idempotencyKey: 'reused-key-1' });
+    await assert.rejects(svc.recordPayment(o.id, { amount: 150, type: 'deposit', idempotencyKey: 'reused-key-1' }),
+      (e) => e.status === 409 && e.extra?.code === 'IDEMPOTENCY_MISMATCH');
+    assert.equal((await payments(o.id)).length, 1);
+  });
+
+  test('the same key on two different orders is two payments (keys are per order)', async () => {
+    const a = await pricedOrder({ wa: '27820000011', reference: 'BRQ-O-00011' });
+    const b = await pricedOrder({ wa: '27820000012', reference: 'BRQ-O-00012' });
+    await svc.recordPayment(a.id, { amount: 100, type: 'deposit', idempotencyKey: 'same-key-xyz' });
+    await svc.recordPayment(b.id, { amount: 100, type: 'deposit', idempotencyKey: 'same-key-xyz' });
+    assert.equal((await payments(a.id)).length + (await payments(b.id)).length, 2);
+  });
+
+  test('recorded_by stores the staff member; the database refuses a non-positive amount', async () => {
+    const o = await pricedOrder();
+    const staff = await t.factory.staff({ role: 'consultant' });
+    await svc.recordPayment(o.id, { amount: 50, type: 'deposit', recordedBy: staff.id });
+    assert.equal((await payments(o.id))[0].recorded_by, staff.id);
+    await assert.rejects(t.query(`INSERT INTO payments (order_id, type, amount) VALUES ($1, 'deposit', 0)`, [o.id]), /payments_amount_positive/);
   });
 });
 

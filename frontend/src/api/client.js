@@ -18,6 +18,8 @@ const isLoginRequest = (config) => /\/staff\/login\/?$/.test(config?.url ?? '')
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    // Only a real 401 (bad / expired token) signs out. A 503 means the database is
+    // briefly unreachable: the session is still good, so stay signed in.
     if (err.response?.status === 401 && !isLoginRequest(err.config)) {
       localStorage.removeItem('braq_token')
       localStorage.removeItem('braq_staff')

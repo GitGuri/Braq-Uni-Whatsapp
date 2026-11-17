@@ -14,7 +14,7 @@ const client = () => (resend ??= new Resend(config.resend.apiKey));
  * while the sending domain is unverified). Throws when Resend rejects it.
  * @returns {Promise<string|null>} Resend message id
  */
-export async function sendEmail({ to, subject, text, html }) {
+export async function sendEmail({ to, subject, text, html, idempotencyKey = null }) {
   let recipients = (Array.isArray(to) ? to : [to]).filter(Boolean);
   if (!recipients.length) throw new Error('sendEmail: no recipients');
 
@@ -43,7 +43,7 @@ export async function sendEmail({ to, subject, text, html }) {
     subject,
     ...(text != null ? { text } : {}),
     ...(html != null ? { html } : {}),
-  });
+  }, idempotencyKey ? { idempotencyKey } : undefined); // a retried job never sends the same email twice (Q-6)
   if (error) {
     logger.error('Resend rejected email', {
       error,

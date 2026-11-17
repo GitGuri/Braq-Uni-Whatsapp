@@ -305,7 +305,7 @@ async function jobHistory({ quotation, order, payments, tickets, conversation })
       }
       push(h.created_at, i === 0 && !h.from_stage ? 'order.created' : (data.override ? 'stage.overridden' : 'stage.changed'), data, h.changed_by_name);
     });
-    for (const p of payments) push(p.created_at, 'payment.recorded', { type: p.type, amount: p.amount, currency: p.currency, notes: p.notes });
+    for (const p of payments) push(p.created_at, 'payment.recorded', { type: p.type, amount: p.amount, currency: p.currency, notes: p.notes }, p.recorded_by_name ?? null);
     if (order.proof_sent_at && !has('proof.sent')) push(order.proof_sent_at, 'proof.sent', { proofUrl: order.proof_url, legacy: true });
   }
   for (const t of tickets) push(t.created_at, 'ticket.opened', { ticketId: t.id, category: t.category, description: t.description });
@@ -333,7 +333,9 @@ export async function getJob(quotationId, staff) {
   const quotation = await getQuotationById(quotationId);
   const order = await latestOrderForQuotation(quotationId);
   const [payments, sizes, tickets, conversation, clientRows, purchaseOrders] = await Promise.all([
-    order ? query('SELECT * FROM payments WHERE order_id = $1 ORDER BY created_at DESC', [order.id]).then((r) => r.rows) : [],
+    order ? query(
+      `SELECT p.*, s.name AS recorded_by_name FROM payments p LEFT JOIN staff s ON s.id = p.recorded_by
+       WHERE p.order_id = $1 ORDER BY p.created_at DESC`, [order.id]).then((r) => r.rows) : [],
     order ? listSizeEntries(order.id) : [],
     ticketsForOrder(order?.id),
     conversationFor({ clientId: quotation.client_id, conversationId: quotation.conversation_id ?? order?.conversation_id }),

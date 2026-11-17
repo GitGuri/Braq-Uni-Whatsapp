@@ -343,18 +343,19 @@ describe('Quote editing', () => {
     assert.equal(r.json.code, 'QUOTE_NOT_DRAFT');
   });
 
-  test('draft PDF: staff can preview it; without a token it stays hidden; a sent quote is public', async () => {
+  test('draft PDF: staff can preview it; without a valid token it is refused (401) — sent quotes too (AUTH-4)', async () => {
     const client = await bb.makeClient();
     const { quotation: q } = await bb.ok(bb.api('POST', '/api/quotations', { token: bb.admin.token, body: { clientId: client.id, lineItems: [item('Polo', 4, 100)] } }), 201);
     const anon = await fetch(`${bb.env.baseUrl}/api/quotations/${q.id}/pdf`);
-    assert.equal(anon.status, 404);
+    assert.equal(anon.status, 401);
     const bad = await fetch(`${bb.env.baseUrl}/api/quotations/${q.id}/pdf`, { headers: { Authorization: 'Bearer nonsense' } });
-    assert.equal(bad.status, 404);
+    assert.equal(bad.status, 401);
     const staff = await fetch(`${bb.env.baseUrl}/api/quotations/${q.id}/pdf`, { headers: { Authorization: `Bearer ${bb.consultant.token}` } });
     assert.equal(staff.status, 200);
     assert.match(staff.headers.get('content-type'), /pdf/);
     await bb.ok(bb.api('POST', `/api/quotations/${q.id}/approve`, { token: bb.admin.token, body: { lineItems: [item('Polo', 4, 100)] } }));
-    assert.equal((await fetch(`${bb.env.baseUrl}/api/quotations/${q.id}/pdf`)).status, 200);
+    assert.equal((await fetch(`${bb.env.baseUrl}/api/quotations/${q.id}/pdf`)).status, 401, 'sent quotes are not public either');
+    assert.equal((await fetch(`${bb.env.baseUrl}/api/quotations/${q.id}/pdf`, { headers: { Authorization: `Bearer ${bb.consultant.token}` } })).status, 200);
   });
 
   test('a quote started from a chat copies what the client asked for (inbound messages since their last quote)', async () => {

@@ -430,6 +430,53 @@ describe('Request fields: pages vs backend validators', () => {
     subset(sent, zodSchema(C('orders.controller.js'), 'AdvanceStageSchema'), 'useJobActions advance');
   });
 
+  test('jobs: every advance says which stage it means to reach (expect ∈ ORDER_STAGES) — DAT-1', () => {
+    const sent = callPayloadKeys(JOB_ACTIONS, 'advanceStage');
+    assert.ok(sent.some((k) => k.name === 'expect'), 'the job page never sends expect on POST /orders/:id/advance');
+    const schema = zodSchema(C('orders.controller.js'), 'AdvanceStageSchema');
+    assert.ok(schema.keys.includes('expect'), `${schema.line} has no expect`);
+    const stages = [...read(path.join(BSRC, 'modules', 'lifecycle', 'machines.js')).match(/ORDER_STAGES = \[([^\]]+)\]/)[1].matchAll(/'(\w+)'/g)].map((m) => m[1]);
+    const src = read(JOB_ACTIONS);
+    const map = Object.fromEntries([...balanced(src, src.indexOf('ADVANCE_EXPECT = {')).matchAll(/(\w+):\s*'(\w+)'/g)].map((m) => [m[1], m[2]]));
+    assert.deepEqual(map, { start_production: 'in_production', mark_ready: 'ready', mark_collected: 'completed' });
+    assert.deepEqual(Object.values(map).filter((s) => !stages.includes(s)), [], 'expect values the backend does not know');
+    // The dashboard's one-click row steps send it too.
+    const dash = read(P('Dashboard.jsx'));
+    assert.match(dash, /ADVANCE_EXPECT\[job\.primary_action\.key\]/);
+    assert.match(dash, /runActionEndpoint\(job\.primary_action\.endpoint, expect \? \{ expect \} : \{\}\)/);
+  });
+
+  test('jobs: manager override is only offered for advance steps (the only endpoint that takes override) — FE-2', () => {
+    const card = read(path.join(FSRC, 'components', 'NextStepCard.jsx'));
+    const list = [...card.match(/OVERRIDABLE_ACTIONS = \[([^\]]+)\]/)[1].matchAll(/'(\w+)'/g)].map((m) => m[1]).sort();
+    assert.deepEqual(list, ['mark_collected', 'mark_ready', 'start_production']);
+    assert.match(card, /const mayOverride = advance && err\.overridable/);
+    // …and only advanceStage() carries override in the job actions.
+    for (const fn of ['recordPayment', 'updateProofStatus', 'sendProof', 'convertFromQuotation']) {
+      assert.ok(!callPayloadKeys(JOB_ACTIONS, fn).some((k) => k.name === 'override'), `${fn} sends override`);
+    }
+  });
+
+  test('jobs: every payment submission carries an idempotency key (same key on retry, new key per submission) — FIN-1', () => {
+    const schema = zodSchema(C('orders.controller.js'), 'RecordPaymentSchema');
+    assert.ok(schema.keys.includes('idempotencyKey'), `${schema.line} has no idempotencyKey`);
+    assert.ok(callPayloadKeys(JOB_ACTIONS, 'recordPayment').some((k) => k.name === 'idempotencyKey'), 'recordPayment is sent without idempotencyKey');
+    const src = read(JOB_ACTIONS);
+    // Kept per order + action while a submission failed, dropped after success / a mismatch.
+    assert.match(src, /payKeys\.current\[slot\] \?\?= newIdempotencyKey\(\)/);
+    assert.match(src, /if \(slot\) delete payKeys\.current\[slot\]/);
+    assert.match(src, /IDEMPOTENCY_MISMATCH/);
+    assert.match(src, /result\?\.replayed/, 'a replayed (already recorded) payment is not reported as such');
+    // "Record other payment": a fresh key each time the dialog opens, reused on retry.
+    const panel = read(P('Jobs', 'OrderPanel.jsx'));
+    assert.match(panel, /const openPayment = \(\) => \{[^}]*setPayKey\(newIdempotencyKey\(\)\)/);
+    assert.match(panel, /run\(payAction, values, \{ idempotencyKey: payKey \}\)/);
+    // The key matches the server's rule (8–100 of [A-Za-z0-9_-]) with or without crypto.randomUUID.
+    const helper = read(path.join(FSRC, 'lib', 'idempotency.js'));
+    assert.match(helper, /randomUUID/);
+    assert.match(helper, /getRandomValues/);
+  });
+
   test('jobs: record deposit / balance → RecordPaymentSchema (job actions + OrderPanel payment form)', () => {
     const schema = zodSchema(C('orders.controller.js'), 'RecordPaymentSchema');
     subset(callPayloadKeys(JOB_ACTIONS, 'recordPayment'), schema, 'useJobActions payment');
@@ -558,6 +605,34 @@ describe('Request fields: pages vs backend validators', () => {
   test('staff: StaffList password rule (min 8) matches CreateStaffSchema', () => {
     assert.match(read(P('Staff', 'StaffList.jsx')), /min: 8/);
     assert.match(zodSchema(C('staff.controller.js'), 'CreateStaffSchema').defs.password, /min\(8\)/);
+  });
+
+  test('staff: remove access / restore access → DELETE (deactivates) and PATCH { isActive } ⊆ UpdateStaffSchema — AUTH-2', () => {
+    const schema = zodSchema(C('staff.controller.js'), 'UpdateStaffSchema');
+    const page = read(P('Staff', 'StaffList.jsx'));
+    subset(callPayloadKeys(P('Staff', 'StaffList.jsx'), 'updateStaff'), schema, 'StaffList restore access');
+    assert.match(page, /updateStaff\(id, \{ isActive: true \}\)/);
+    assert.ok(BR.mounted.some((r) => r.method === 'PATCH' && r.full === '/api/staff/:id'), 'PATCH /api/staff/:id is not mounted');
+    // Wording: access is removed, not the account; own row and inactive rows offer no remove button.
+    assert.match(page, /They can no longer sign in\. Their name stays on past work\./);
+    assert.match(page, /r\.id === me\?\.id\) return null/);
+    assert.match(page, /r\.is_active === false/);
+    assert.match(read(S('staff.service.js')), /SELECT id, name, email, role, is_active, created_at FROM staff/);
+  });
+
+  test('broadcasts: custom always sends an audience; delay sends no reason (the server ignores it) — FE-5', () => {
+    const page = read(P('Broadcasts.jsx'));
+    assert.match(page, /name="audience"[^>]*rules=\{\[\{ required: true/);
+    assert.match(page, /onFinish=\{\(\) => delayMut\.mutate\(\{\}\)\}/);
+    assert.doesNotMatch(page, /name="reason"/);
+    const opts = [...page.match(/AUDIENCE_OPTIONS = \[([\s\S]*?)\]/)[1].matchAll(/value: '(\w+)'/g)].map((m) => m[1]).sort();
+    assert.deepEqual(opts, ['active_orders', 'all_clients', 'corporate', 'retail']);
+  });
+
+  test('quotations: the quote builder lists active products only (?activeOnly=true) — FE-15', () => {
+    const src = read(P('Jobs', 'QuotePanel.jsx'));
+    assert.match(src, /listProducts\(\{ activeOnly: true \}\)/);
+    assert.match(read(C('products.controller.js')), /activeOnly/);
   });
 
   test('login: Login form password rule matches LoginSchema (min 6) so a 400 can never reach the UI', () => {
@@ -788,5 +863,36 @@ describe('Response fields: what pages render vs what services return', () => {
       for (const m of src.matchAll(/toFixed\(2\)/g)) offenders.push(loc(f, src, m.index));
     }
     assert.deepEqual(offenders, []);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 4. Error wording (pure helper — imported, no network)
+// ════════════════════════════════════════════════════════════════════════════
+describe('Error wording: transport failures and 503 — FE-7', async () => {
+  const { errorMessage, NO_RESPONSE_MUTATION, NO_RESPONSE_READ, SERVICE_UNAVAILABLE } = await import('../src/utils/errorMessage.js');
+  const axiosErr = (extra) => Object.assign(new Error('timeout of 30000ms exceeded'), { isAxiosError: true, ...extra });
+
+  test('a mutation with no response says it may have gone through (never the raw axios text)', () => {
+    const msg = errorMessage(axiosErr({ code: 'ECONNABORTED', config: { method: 'post' }, request: {} }));
+    assert.equal(msg, NO_RESPONSE_MUTATION);
+    assert.doesNotMatch(msg, /30000ms/);
+    assert.equal(errorMessage(axiosErr({ code: 'ERR_NETWORK', config: { method: 'patch' }, request: {} })), NO_RESPONSE_MUTATION);
+  });
+
+  test('a read with no response asks to check the connection', () => {
+    assert.equal(errorMessage(axiosErr({ code: 'ECONNABORTED', config: { method: 'get' }, request: {} })), NO_RESPONSE_READ);
+  });
+
+  test('503 → "Service temporarily unavailable"; other server errors keep the server message', () => {
+    assert.equal(errorMessage(axiosErr({ config: { method: 'get' }, response: { status: 503, data: { error: 'db down' } } })), SERVICE_UNAVAILABLE);
+    assert.equal(errorMessage(axiosErr({ config: { method: 'post' }, response: { status: 409, data: { error: 'Already done' } } })), 'Already done');
+    assert.equal(errorMessage(new Error('plain')), 'plain');
+  });
+
+  test('the axios interceptor signs out on 401 only (a 503 keeps the session)', () => {
+    const client = read(path.join(FSRC, 'api', 'client.js'));
+    assert.match(client, /err\.response\?\.status === 401 && !isLoginRequest/);
+    assert.doesNotMatch(client, /status (?:>=|===) 5\d\d[^\n]*removeItem/);
   });
 });

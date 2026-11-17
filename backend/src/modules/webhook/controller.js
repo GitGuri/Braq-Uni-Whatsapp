@@ -23,9 +23,12 @@ export function verify(req, res) {
 // ── Signature check (X-Hub-Signature-256) ─────────────────────────────────────
 let warnedNoSecret = false;
 
-function hasValidSignature(req) {
+export function hasValidSignature(req) {
   const secret = config.meta.appSecret;
   if (!secret) {
+    // Production never accepts unsigned webhooks (start-up also refuses to run
+    // without the secret — core/config.js assertProductionConfig).
+    if (config.env === 'production') return false;
     if (!warnedNoSecret) {
       warnedNoSecret = true;
       logger.warn('META_APP_SECRET is not set — webhook signatures are NOT being verified');

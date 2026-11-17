@@ -23,7 +23,7 @@ test('custom broadcast: 202, fanned out to every recipient, counts and status re
   const phones = clients.map((c) => c.whatsapp_number);
   const { rows: [{ n }] } = await bb.db.query(`SELECT COUNT(DISTINCT whatsapp_number)::int AS n FROM clients WHERE client_type = 'hospitality'`);
 
-  const r = await bb.api('POST', '/api/broadcasts/custom', { token: bb.manager.token, body: { message: 'Season special', audience: '__all__' } });
+  const r = await bb.api('POST', '/api/broadcasts/custom', { token: bb.manager.token, body: { message: 'Season special', audience: 'all_clients' } });
   assert.equal(r.status, 202, r.text);
   assert.ok(r.json.broadcastId);
   assert.ok(r.json.recipients >= n);
@@ -104,4 +104,24 @@ test('consultants cannot send (403, nothing queued) but can read the history', a
   assert.equal(h.status, 200);
   assert.ok(h.json.broadcasts.length >= 1);
   assert.ok(h.json.broadcasts.every((x) => 'status' in x && 'sent_count' in x));
+});
+
+test('SEC-4: an unknown or missing audience is refused (400) — never widened to every client', async () => {
+  const { rows: [{ n: before }] } = await bb.db.query('SELECT COUNT(*)::int AS n FROM broadcasts');
+  for (const body of [{ message: 'Typo', audience: '__all__' }, { message: 'No audience' }]) {
+    const r = await bb.api('POST', '/api/broadcasts/custom', { token: bb.admin.token, body });
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.match(r.json.error, /audience/);
+  }
+  const { rows: [{ n: afterCount }] } = await bb.db.query('SELECT COUNT(*)::int AS n FROM broadcasts');
+  assert.equal(afterCount, before, 'nothing queued');
+});
+
+test('SEC-4: malformed broadcast bodies are a 400 and the API stays up', async () => {
+  for (const body of [{ message: 1, audience: 'corporate' }, { message: { x: 1 }, audience: 'corporate' }, { mediaId: 5, audience: 'retail' }]) {
+    const r = await bb.api('POST', '/api/broadcasts/custom', { token: bb.admin.token, body });
+    assert.equal(r.status, 400, `${JSON.stringify(body)} → ${r.status} ${r.text}`);
+  }
+  const h = await bb.api('GET', '/api/broadcasts', { token: bb.admin.token });
+  assert.equal(h.status, 200, 'the process is still serving requests');
 });

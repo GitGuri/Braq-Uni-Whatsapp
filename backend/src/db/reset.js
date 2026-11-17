@@ -19,13 +19,14 @@ import { config } from '../core/config.js';
 import { pool } from '../core/db.js';
 import { migrate } from '../core/migrate.js';
 import { logger } from '../core/logger.js';
+import { LOCAL_HOSTS, dbHost, isSupabase, configTarget } from './safety.js';
 
 const DROP_STATEMENTS = [
 `DROP TABLE IF EXISTS
   order_stage_history, order_size_entries, broadcasts, purchase_orders,
   school_catalog, payments, tickets, quotations, orders, messages,
   conversations, products, clients, staff, settings, sequence_counters,
-  schema_migrations, jobs, inbound_events
+  schema_migrations, jobs, inbound_events, job_events, rate_limits, broadcast_outcomes
   CASCADE`,
 
 `DROP TYPE IF EXISTS
@@ -35,12 +36,7 @@ const DROP_STATEMENTS = [
   CASCADE`,
 ];
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-
-function targetHost() {
-  if (!config.db.url) return config.db.host;
-  try { return new URL(config.db.url).hostname; } catch { return ''; }
-}
+const targetHost = () => dbHost(configTarget(config));
 
 function refusal(argv) {
   if (!argv.includes('--yes-wipe-everything')) {
@@ -50,7 +46,7 @@ function refusal(argv) {
     return 'Refusing to wipe the database: NODE_ENV is production.';
   }
   const host = targetHost();
-  if (/supabase\.(co|com|net)$/i.test(host) || /supabase/i.test(config.db.url)) {
+  if (isSupabase(configTarget(config))) {
     return `Refusing to wipe the database: ${host || 'target'} is a Supabase host (production). Point DATABASE_URL at a local Postgres.`;
   }
   if (!LOCAL_HOSTS.has(host) && !argv.includes('--allow-remote-host')) {

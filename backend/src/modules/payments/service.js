@@ -102,21 +102,49 @@ function paymentReceivedMessage({ reference, type, amount, currency, state }) {
 // ── Record a payment, recompute payment_status / balance, notify the client ──
 // Runs in a transaction with the order row locked so concurrent payments are
 // applied one at a time against an accurate running total.
-export async function recordPayment(orderId, data = {}) {
+export async function recordPayment(orderId, data = {}) { // data: recordPaymentTx options
   const { payment } = await withTransaction((tx) => recordPaymentTx(tx, orderId, data));
   return payment;
 }
 
 /**
+ * The payment already stored under this idempotency key for the order, or null.
+ * Call with the order row locked (recordPaymentTx / lockOrderForPayment) so a
+ * concurrent duplicate waits for the first and then finds it.
+ */
+export async function findPaymentByKey(tx, orderId, idempotencyKey) {
+  if (!idempotencyKey) return null;
+  const { rows } = await tx.query(
+    'SELECT * FROM payments WHERE order_id = $1 AND idempotency_key = $2',
+    [orderId, idempotencyKey]
+  );
+  return rows[0] || null;
+}
+
+/** Lock the order row for a payment (404 when it does not exist). */
+export async function lockOrderForPayment(tx, orderId) {
+  const { rows } = await tx.query('SELECT id FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+  if (!rows.length) throw new HttpError(404, 'Order not found');
+}
+
+/**
  * recordPayment on the caller's transaction (so a payment and a stage advance
  * can commit — or roll back — together).
- * @returns {Promise<{ payment: object, state: object }>} the payments row and computePaymentState()
+ *
+ * idempotencyKey: the same key on the same order returns the payment stored the
+ * first time ({ replayed: true }) — no second row, no second receipt (FIN-1).
+ * recordedBy: the staff id that recorded it (audit).
+ * @returns {Promise<{ payment: object, state: object|null, replayed?: true }>}
  */
-export async function recordPaymentTx(tx, orderId, { type, amount, currency, notes } = {}) {
+export async function recordPaymentTx(tx, orderId, { type, amount, currency, notes, idempotencyKey = null, recordedBy = null } = {}) {
   if (!PAYMENT_TYPES.includes(type)) throw new HttpError(400, `Invalid payment type: ${type}`);
   const amountCents = toCents(amount);
   if (amountCents == null || amountCents <= 0 || Math.abs(Number(amount) * 100 - amountCents) > 1e-6) {
     throw new HttpError(400, 'Amount must be a positive value with at most 2 decimal places');
+  }
+  if ((currency || 'ZAR') !== 'ZAR') {
+    // Every total, deposit and balance is in rand; a foreign amount would be summed as rand.
+    throw new HttpError(400, 'Payments are recorded in ZAR only');
   }
 
   {
@@ -132,6 +160,15 @@ export async function recordPaymentTx(tx, orderId, { type, amount, currency, not
     if (!rows.length) throw new HttpError(404, 'Order not found');
     const order = rows[0];
 
+    const existing = await findPaymentByKey(tx, orderId, idempotencyKey);
+    if (existing) {
+      if (existing.type !== type || toCents(existing.amount) !== amountCents) {
+        throw new HttpError(409, 'This payment form was already submitted with different details — refresh and record it again',
+          { code: 'IDEMPOTENCY_MISMATCH' });
+      }
+      return { payment: existing, state: null, replayed: true };
+    }
+
     const { rows: sumRows } = await tx.query(
       'SELECT COALESCE(SUM(amount), 0) AS total_paid FROM payments WHERE order_id = $1',
       [orderId]
@@ -143,9 +180,9 @@ export async function recordPaymentTx(tx, orderId, { type, amount, currency, not
     });
 
     const { rows: payRows } = await tx.query(
-      `INSERT INTO payments (order_id, type, amount, currency, notes)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [orderId, type, amount, currency || 'ZAR', notes || null]
+      `INSERT INTO payments (order_id, type, amount, currency, notes, idempotency_key, recorded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [orderId, type, amount, 'ZAR', notes || null, idempotencyKey || null, recordedBy || null]
     );
 
     await tx.query(
@@ -157,7 +194,7 @@ export async function recordPaymentTx(tx, orderId, { type, amount, currency, not
     if (order.whatsapp_number) {
       await queueWhatsAppText(tx, {
         to: order.whatsapp_number,
-        body: paymentReceivedMessage({ reference: order.reference, type, amount, currency: currency || 'ZAR', state }),
+        body: paymentReceivedMessage({ reference: order.reference, type, amount, currency: 'ZAR', state }),
         clientId: order.client_id,
         conversationId: order.conversation_id,
         templateFallback: TEMPLATE_FALLBACKS.paymentReceived({

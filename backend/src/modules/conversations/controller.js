@@ -37,6 +37,8 @@ export async function getById(req, res) {
 export async function reply(req, res) {
   const { body } = req.body ?? {};
   if (typeof body !== 'string' || !body.trim()) return res.status(400).json({ error: 'Message body is required' });
+  // WhatsApp's text limit: refuse instead of letting Meta reject it later (SEC-9).
+  if (body.length > 4096) return res.status(400).json({ error: 'Message is too long (WhatsApp allows 4096 characters)' });
 
   try {
     const { messageId, jobId } = await conversations.reply(req.params.id, req.staff.id, body);
@@ -61,7 +63,7 @@ export async function takeover(req, res) {
 // ── PATCH /conversations/:id/handback ────────────────────────────────────────
 export async function handback(req, res) {
   try {
-    res.json({ conversation: await conversations.handback(req.params.id) });
+    res.json({ conversation: await conversations.handback(req.params.id, req.staff) });
   } catch (err) {
     sendError(res, err, 'Failed to hand back conversation');
   }
@@ -92,7 +94,7 @@ export async function assign(req, res) {
   if (!isUuid(staffId)) return res.status(400).json({ error: 'staffId must be a staff UUID' });
 
   try {
-    res.json({ conversation: await conversations.assign(req.params.id, staffId) });
+    res.json({ conversation: await conversations.assign(req.params.id, staffId, req.staff) });
   } catch (err) {
     sendError(res, err, 'Failed to assign conversation');
   }

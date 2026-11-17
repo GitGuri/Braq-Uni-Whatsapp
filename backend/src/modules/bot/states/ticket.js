@@ -76,6 +76,7 @@ export async function logTicket(c, { category, description, startedAt = null }) 
     orderId:  linkedOrder?.id,
     category,
     description,
+    sourceEventId: c.turn.eventId, // a replayed turn finds this ticket instead of opening another (DAT-2)
   });
   const no = ticketNo(ticket);
   c.turn.lastTicketNo = no;

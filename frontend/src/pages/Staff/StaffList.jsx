@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  App, Table, Button, Modal, Form, Input, Select, Popconfirm,
+  App, Table, Button, Modal, Form, Input, Select, Popconfirm, Tag,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
-import { listStaff, createStaff, deleteStaff } from '../../api/staff.js'
+import { PlusOutlined, DeleteOutlined, UndoOutlined } from '@ant-design/icons'
+import { listStaff, createStaff, deleteStaff, updateStaff } from '../../api/staff.js'
 import { errorMessage } from '../../utils/errorMessage.js'
 import { useCan } from '../../lib/useCan.js'
+import { useAuth } from '../../auth/AuthContext.jsx'
+import ErrorState from '../../components/ErrorState.jsx'
 import NoAccess from '../../components/NoAccess.jsx'
 import { initials } from '../../lib/format.js'
 
@@ -35,10 +37,11 @@ function StaffManager() {
   const qc = useQueryClient()
   const { message } = App.useApp()
   const canManage = useCan()('staff.manage')
+  const { staff: me } = useAuth()
   const [modalOpen, setModalOpen] = useState(false)
   const [form] = Form.useForm()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['staff-list'],
     queryFn: listStaff,
   })
@@ -56,13 +59,24 @@ function StaffManager() {
     onError: (err) => message.error(errorMessage(err, 'Could not create the staff account')),
   })
 
+  // Removing access deactivates the account: they can no longer sign in, past work keeps their name.
+  // The server refuses your own account (SELF) and the last active admin (LAST_ADMIN) — its message says why.
   const deleteMutation = useMutation({
     mutationFn: (id) => deleteStaff(id),
     onSuccess: () => {
-      message.success('Staff account deleted')
+      message.success('Access removed')
       qc.invalidateQueries({ queryKey: ['staff-list'] })
     },
-    onError: (err) => message.error(errorMessage(err, 'Could not delete the staff account')),
+    onError: (err) => message.error(errorMessage(err, 'Could not remove their access')),
+  })
+
+  const restoreMutation = useMutation({
+    mutationFn: (id) => updateStaff(id, { isActive: true }),
+    onSuccess: () => {
+      message.success('Access restored')
+      qc.invalidateQueries({ queryKey: ['staff-list'] })
+    },
+    onError: (err) => message.error(errorMessage(err, 'Could not restore their access')),
   })
 
   const columns = [
@@ -70,10 +84,11 @@ function StaffManager() {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      render: (v) => (
+      render: (v, r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, whiteSpace: 'nowrap' }}>
           <span className="braq-avatar" aria-hidden="true">{initials(v)}</span>
           <span style={{ fontWeight: 600 }}>{v}</span>
+          {r.is_active === false && <Tag>Inactive</Tag>}
         </span>
       ),
     },
@@ -103,25 +118,44 @@ function StaffManager() {
       title: '',
       key: 'actions',
       width: 60,
-      render: (_, r) => (
-        <Popconfirm
-          title={`Delete ${r.name}?`}
-          description="Their account is removed permanently and they can no longer sign in."
-          onConfirm={() => deleteMutation.mutate(r.id)}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-          cancelText="Cancel"
-        >
-          <Button
-            size="small"
-            danger
-            type="text"
-            icon={<DeleteOutlined />}
-            aria-label={`Delete ${r.name}`}
-            loading={deleteMutation.isPending && deleteMutation.variables === r.id}
-          />
-        </Popconfirm>
-      ),
+      render: (_, r) => {
+        // Your own access can't be removed from here (the server refuses it too).
+        if (r.id === me?.id) return null
+        if (r.is_active === false) {
+          return (
+            <Button
+              size="small"
+              type="text"
+              icon={<UndoOutlined />}
+              onClick={() => restoreMutation.mutate(r.id)}
+              loading={restoreMutation.isPending && restoreMutation.variables === r.id}
+              style={{ whiteSpace: 'nowrap' }}
+            >
+              Restore access
+            </Button>
+          )
+        }
+        return (
+          <Popconfirm
+            title={`Remove access for ${r.name}?`}
+            description="They can no longer sign in. Their name stays on past work."
+            onConfirm={() => deleteMutation.mutate(r.id)}
+            okText="Remove access"
+            okButtonProps={{ danger: true }}
+            cancelText="Cancel"
+          >
+            <Button
+              size="small"
+              danger
+              type="text"
+              icon={<DeleteOutlined />}
+              aria-label={`Remove access for ${r.name}`}
+              title="Remove access"
+              loading={deleteMutation.isPending && deleteMutation.variables === r.id}
+            />
+          </Popconfirm>
+        )
+      },
     },
   ]
 
@@ -140,7 +174,7 @@ function StaffManager() {
       </div>
 
       <section className="braq-panel" style={{ overflow: 'hidden' }}>
-        <Table
+        {error ? <ErrorState title="Could not load staff" error={error} onRetry={refetch} /> : <Table
           dataSource={staff}
           columns={columns.filter(Boolean)}
           rowKey="id"
@@ -149,7 +183,7 @@ function StaffManager() {
           pagination={{ pageSize: 20, hideOnSinglePage: true }}
           scroll={{ x: 'max-content' }}
           locale={{ emptyText: 'No staff accounts yet. Use Add staff member to invite someone.' }}
-        />
+        />}
       </section>
 
       <Modal

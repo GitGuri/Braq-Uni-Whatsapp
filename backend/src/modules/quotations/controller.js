@@ -5,9 +5,7 @@ import { lifecycleForQuotation } from '../jobs/service.js';
 import { sendError, validationBody, isUuid } from '../../core/errors.js';
 import { paged } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
-import { query } from '../../core/db.js';  // used by claim() and draftViewer()
-import jwt from 'jsonwebtoken';
-import { config } from '../../core/config.js';
+import { query } from '../../core/db.js';  // used by claim()
 
 const SizeEntrySchema = z.object({
   size: z.string().min(1),
@@ -206,28 +204,11 @@ export async function updateStatus(req, res) {
   }
 }
 
-/** The signed-in, active staff member behind a Bearer token, or null (no error: the route is public). */
-async function draftViewer(req) {
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) return null;
-  try {
-    const payload = jwt.verify(header.slice(7), config.jwt.secret, { algorithms: ['HS256'] });
-    const { rows } = await query('SELECT id FROM staff WHERE id = $1 AND is_active = true', [payload.id]);
-    return rows[0] || null;
-  } catch {
-    return null;
-  }
-}
-
-// Unauthenticated — Meta's document fetcher needs a plain URL it can GET. A
-// draft (still being priced) is only shown to signed-in staff, as a preview.
+// Staff only (requireAuth on the router): the PDF carries the client's name,
+// number, address and prices. Drafts are a preview of the quote being priced.
 export async function getPdf(req, res) {
   try {
     const quotation = await quotationsService.getQuotationById(req.params.id);
-
-    if (quotation.status === 'draft' && !(await draftViewer(req))) {
-      return res.status(404).json({ error: 'Quotation not found' });
-    }
 
     if (!Array.isArray(quotation.line_items) || quotation.line_items.length === 0) {
       return res.status(422).json({ error: 'Quotation has no line items' });
@@ -242,6 +223,7 @@ export async function getPdf(req, res) {
     };
 
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Disposition', `inline; filename="${quotation.reference}.pdf"`);
     const doc = renderQuotationPdf(quotation, clientInfo);
     doc.pipe(res);

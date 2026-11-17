@@ -352,7 +352,9 @@ export const TEMPLATES = {
     `Reply *3* to request a new quote | *9* to talk to a person.`,
 
   QUOTE_STATUS: ({ reference, status, total, validUntil, expiredOn, orderReference, resent = false }) => {
-    const head = `📋 *Quote ${reference}*${total != null && Number(total) > 0 ? ` — ${money(total)} incl. VAT` : ''}\n\n`;
+    // A draft's total is unreviewed (it may hold AI price suggestions): never shown to the client (FIN-3).
+    const showTotal = status !== 'draft' && total != null && Number(total) > 0;
+    const head = `📋 *Quote ${reference}*${showTotal ? ` — ${money(total)} incl. VAT` : ''}\n\n`;
     switch (status) {
       case 'draft':
         return head + `Our team is still pricing this quote — your consultant will send it here as soon as it's ready.`;

@@ -32,7 +32,8 @@ import { query } from '../../core/db.js';
 import { logger } from '../../core/logger.js';
 import { enqueue, PermanentJobError } from '../../core/queue.js';
 import {
-  sendTextMessage, sendDocument, sendImage, sendTemplate, templateConfig, isReengagementError, windowCheckEnabled,
+  sendTextMessage, sendDocument, sendImage, sendTemplate, templateConfig, isReengagementError, isPermanentSendError,
+  windowCheckEnabled,
 } from '../../integrations/whatsapp.client.js';
 import { notifyUndeliverable } from '../../modules/notifications/service.js';
 
@@ -66,17 +67,60 @@ function storedBody(p) {
   return p.caption ? `${label} ${p.caption}` : label;
 }
 
-/** Record one broadcast recipient's outcome; the broadcast is done when all have one. */
-export async function countBroadcastOutcome(broadcastId, outcome) {
+/**
+ * Record one broadcast recipient's outcome — once per job (MSG-5): the outcome row
+ * and the counter bump are one statement, and a second call for the same job
+ * changes nothing. The broadcast is done when every recipient has an outcome.
+ * @returns {Promise<boolean>} whether this call recorded it
+ */
+export async function countBroadcastOutcome(broadcastId, outcome, jobId, db = { query }) {
   const col = outcome === 'sent' ? 'sent_count' : 'failed_count';
-  await query(
-    `UPDATE broadcasts
+  const { rows } = await db.query(
+    `WITH o AS (
+       INSERT INTO broadcast_outcomes (job_id, broadcast_id, outcome) VALUES ($2, $1, $3)
+       ON CONFLICT (job_id) DO NOTHING RETURNING 1)
+     UPDATE broadcasts
      SET ${col} = COALESCE(${col}, 0) + 1,
          status = CASE WHEN COALESCE(sent_count, 0) + COALESCE(failed_count, 0) + 1 >= recipient_count
                        THEN 'done' ELSE 'sending' END
-     WHERE id = $1`,
-    [broadcastId]
+     WHERE id = $1 AND EXISTS (SELECT 1 FROM o)
+     RETURNING id`,
+    [broadcastId, jobId, outcome]
   );
+  return rows.length > 0;
+}
+
+/** The outcome already recorded for this broadcast send job, or null. */
+async function recordedOutcome(jobId) {
+  const { rows } = await query('SELECT outcome FROM broadcast_outcomes WHERE job_id = $1', [jobId]);
+  return rows[0]?.outcome ?? null;
+}
+
+/**
+ * Bookkeeping for whatsapp.send jobs dead-lettered without their handler's final
+ * step (a crashed worker's job reclaimed past max attempts): the inbox row still
+ * says 'queued' and the broadcast never reaches 'done'. Run by the worker's
+ * maintenance pass; idempotent.
+ * @returns {Promise<{ messages: number, broadcasts: number }>}
+ */
+export async function settleDeadSends(db = { query }) {
+  const { rowCount: messages } = await db.query(
+    `UPDATE messages m SET status = 'failed'
+     FROM jobs j
+     WHERE m.job_id = j.id AND j.type = 'whatsapp.send' AND j.status = 'dead' AND m.status = 'queued'`
+  );
+  const { rows } = await db.query(
+    `SELECT j.id, j.payload->>'broadcastId' AS broadcast_id
+     FROM jobs j
+     WHERE j.type = 'whatsapp.send' AND j.status = 'dead' AND j.payload ? 'broadcastId'
+       AND NOT EXISTS (SELECT 1 FROM broadcast_outcomes b WHERE b.job_id = j.id)
+     LIMIT 500`
+  );
+  let broadcasts = 0;
+  for (const r of rows) {
+    if (await countBroadcastOutcome(r.broadcast_id, 'failed', Number(r.id), db)) broadcasts++;
+  }
+  return { messages, broadcasts };
 }
 
 /**
@@ -131,7 +175,7 @@ async function markNeedsTemplate(p, job, { template, reason }) {
   } else {
     await recordOutbound({ ...p, body, metaMessageId: null, jobId: job.id, status: 'needs_template' });
   }
-  if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, 'failed');
+  if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, 'failed', job.id);
   const client = await clientFor(p);
   const convo = await resolveConversation(p).catch(() => null);
   await notifyUndeliverable({ query }, { client, conversationId: convo?.id ?? null, body, template, reason });
@@ -148,9 +192,12 @@ export default async function whatsappSend(payload, { job }) {
     if (p.kind === 'template' && !p.template?.name) throw new PermanentJobError('whatsapp.send: template message needs template.name');
     if (['document', 'image'].includes(p.kind) && !p.mediaId && !p.link) throw new PermanentJobError(`whatsapp.send: ${p.kind} needs mediaId or link`);
 
+    if (p.broadcastId && await recordedOutcome(job.id)) return { skipped: 'already sent' };
     const { rows: existing } = await query('SELECT id, status FROM messages WHERE job_id = $1', [job.id]);
     const recordedRow = p.recorded ? existing[0] : null;
     if (existing.length && !(recordedRow && ['queued', 'failed'].includes(recordedRow.status))) {
+      // Sent and stored before a crash: make sure a broadcast still counts it (once).
+      if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, existing[0].status === 'needs_template' ? 'failed' : 'sent', job.id);
       return { skipped: 'already sent' };
     }
 
@@ -170,6 +217,9 @@ export default async function whatsappSend(payload, { job }) {
       try {
         metaMessageId = await deliver(p);
       } catch (err) {
+        // Meta refused this exact request (bad parameter, not a WhatsApp number…):
+        // retrying cannot help and would hold up the client's other messages (MSG-3).
+        if (isPermanentSendError(err)) throw new PermanentJobError(err.message);
         if (!isReengagementError(err)) throw err;
         // 131047: outside the window after all — never retry the free text.
         const r = p.templateFallback ? await deliverTemplate(p, p.templateFallback) : { needsTemplate: true, template: null };
@@ -191,7 +241,7 @@ export default async function whatsappSend(payload, { job }) {
     } else {
       stored = await recordOutbound({ ...p, body: storedBody(p), metaMessageId, jobId: job.id });
     }
-    if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, 'sent');
+    if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, 'sent', job.id);
     return { metaMessageId, stored, ...(template ? { template } : {}) };
   } catch (err) {
     const final = err?.permanent === true || job.attempts >= job.max_attempts;
@@ -199,7 +249,7 @@ export default async function whatsappSend(payload, { job }) {
       // Dead-lettered: show the failure in the inbox and count it on the broadcast.
       try {
         if (p.recorded) await query(`UPDATE messages SET status = 'failed' WHERE job_id = $1 AND status = 'queued'`, [job.id]);
-        if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, 'failed');
+        if (p.broadcastId) await countBroadcastOutcome(p.broadcastId, 'failed', job.id);
       } catch (e) {
         logger.error('whatsapp.send: could not record the failed send', { jobId: job.id, error: e.message });
       }

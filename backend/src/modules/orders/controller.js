@@ -5,6 +5,7 @@ import { renderSizeRunSheet } from './sizeRunSheet.pdf.js';
 import { parseSizeFile, bulkInsertSizeEntries, listSizeEntries } from './sizes.js';
 import { lifecycleForOrder } from '../jobs/service.js';
 import { LineItemSchema } from '../quotations/controller.js';
+import { ORDER_STAGES } from '../lifecycle/machines.js';
 import { sendError, validationBody, isUuid } from '../../core/errors.js';
 import { paged } from '../../core/http.js';
 import { logger } from '../../core/logger.js';
@@ -54,6 +55,10 @@ const AdvanceStageSchema = z.object({
   deliveryType:        z.enum(['collection','delivery']).optional().default('collection'),
   // Push past an overridable guard (admin / manager, reason ≥ 5 chars — checked by the lifecycle guards).
   override:            z.object({ reason: z.string().max(1000) }).nullable().optional(),
+  // The stage the caller means to reach. When the order has moved on since the
+  // caller looked (a second tab, a retried request), the advance is refused with
+  // 409 STALE instead of skipping a stage. The dashboard always sends it (DAT-1).
+  expect:              z.enum(ORDER_STAGES).optional(),
   // Money taken in the same step (e.g. the balance when the client collects) — recorded first, same transaction.
   payment:             z.object({
     amount: AmountSchema,
@@ -66,9 +71,13 @@ const RecordPaymentSchema = z.object({
   type:     z.enum(['deposit', 'balance', 'full']),
   amount:   z.number().finite().positive().max(1e9)
               .refine(hasAtMostTwoDecimals, 'must have at most 2 decimal places'),
-  currency: z.string().length(3).default('ZAR'),
+  // Totals, deposits and balances are rand; a foreign amount would be summed as rand (FIN-9).
+  currency: z.literal('ZAR', { errorMap: () => ({ message: 'payments are recorded in ZAR only' }) }).default('ZAR'),
   notes:    z.string().max(2000).optional(),
   startProduction: StartProductionSchema,
+  // One key per form submission (the dashboard sends a UUID): a retry or double
+  // submit returns the first payment instead of recording it twice (FIN-1).
+  idempotencyKey: z.string().min(8).max(100).regex(/^[\w-]+$/, 'letters, digits, - and _ only').optional(),
 });
 
 const HoldSchema = z.object({
@@ -247,8 +256,9 @@ export async function recordPayment(req, res) {
   if (!parsed.success) return res.status(400).json(validationBody(parsed.error));
 
   try {
-    const { payment, advanced } = await ordersService.recordPaymentAndAdvance(req.params.id, req.staff, parsed.data);
-    res.status(201).json({ payment, ...(advanced ? { advanced } : {}) });
+    const { payment, advanced, replayed } = await ordersService.recordPaymentAndAdvance(req.params.id, req.staff, parsed.data);
+    // 200 + replayed: this submission was already recorded — nothing new was stored.
+    res.status(replayed ? 200 : 201).json({ payment, ...(advanced ? { advanced } : {}), ...(replayed ? { replayed: true } : {}) });
   } catch (err) { handleError(res, err, 'Failed to record payment'); }
 }
 

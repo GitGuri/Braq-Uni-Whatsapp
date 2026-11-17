@@ -94,6 +94,12 @@ export async function convertQuotationToOrder(tx, {
   if (quotation.status !== 'accepted') {
     throw new HttpError(400, 'Only accepted quotations can be converted to orders', { code: 'QUOTE_NOT_ACCEPTED' });
   }
+  // A client ordering on WhatsApp from an accepted quote whose validity has passed
+  // would lock in stale prices: refused (the bot offers a refreshed quote). Staff
+  // conversions and purchase orders keep their own rules (FIN-2).
+  if (source === 'bot_accept' && quotation.past_validity) {
+    throw new HttpError(409, 'This quotation is past its validity date — ask for a refreshed quote', { code: 'QUOTE_EXPIRED' });
+  }
 
   // Deposit/balance split in integer cents so deposit + balance always equals the total.
   const totalCents = toCents(quotation.total || 0);

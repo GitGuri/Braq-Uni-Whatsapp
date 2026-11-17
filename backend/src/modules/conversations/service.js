@@ -243,16 +243,42 @@ export async function takeover(id, staff) {
   throw new HttpError(409, `Already handled by ${current[0].owner_name ?? 'another consultant'}`, { code: 'CONVERSATION_CLAIMED' });
 }
 
-/** Return the conversation to the bot and tell the client (queued + recorded). */
-export async function handback(id) {
+/**
+ * 409 naming the owner when `id` exists but belongs to someone else (the caller may
+ * not reassign it); 404 when it does not exist.
+ */
+async function refuseNotYours(id) {
+  const { rows } = await query(
+    `SELECT cv.id, s.name AS owner_name FROM conversations cv LEFT JOIN staff s ON s.id = cv.assigned_staff_id WHERE cv.id = $1`,
+    [id]
+  );
+  if (!rows.length) throw new HttpError(404, 'Conversation not found');
+  throw new HttpError(409, `Already handled by ${rows[0].owner_name ?? 'another consultant'}`, { code: 'CONVERSATION_CLAIMED' });
+}
+
+/** The ownership rule shared by take-over, hand-back and assign (AUTH-1), as SQL on prev.assigned_staff_id. */
+const MAY_ACT_SQL = (staffParam, mayReassignParam) =>
+  `(prev.assigned_staff_id IS NULL OR prev.assigned_staff_id = ${staffParam} OR ${mayReassignParam}::boolean)`;
+
+/**
+ * Return the conversation to the bot and tell the client (queued + recorded).
+ * Only the chat's owner (or anyone when unassigned, or an admin / manager) may hand
+ * it back — never another consultant's chat (AUTH-1).
+ */
+export async function handback(id, staff = null) {
+  const actor = typeof staff === 'string' ? { id: staff } : staff;
+  const mayReassign = !actor || MAY_REASSIGN.has(actor.role);
   return withTransaction(async (tx) => {
     const { rows } = await tx.query(
-      `UPDATE conversations
+      `WITH prev AS (SELECT id, assigned_staff_id FROM conversations WHERE id = $1 FOR UPDATE)
+       UPDATE conversations cv
        SET state = 'main_menu', assigned_staff_id = NULL, updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
-      [id]
+       FROM prev
+       WHERE cv.id = prev.id AND ${MAY_ACT_SQL('$2::uuid', '$3')}
+       RETURNING cv.*`,
+      [id, actor?.id ?? null, mayReassign]
     );
-    if (!rows.length) throw new HttpError(404, 'Conversation not found');
+    if (!rows.length) await refuseNotYours(id);
 
     const { rows: clientRows } = await tx.query('SELECT whatsapp_number FROM clients WHERE id = $1', [rows[0].client_id]);
     if (clientRows[0]?.whatsapp_number) {
@@ -296,16 +322,25 @@ export async function close(id) {
   return rows[0];
 }
 
-export async function assign(id, staffId) {
+/**
+ * Assign the chat to `staffId`. Allowed when the chat is unassigned, is the caller's
+ * own (handing it to a colleague), or the caller is an admin / manager (AUTH-1).
+ */
+export async function assign(id, staffId, caller = null) {
   const { rows: staff } = await query('SELECT id FROM staff WHERE id = $1 AND is_active = true', [staffId]);
   if (!staff.length) throw new HttpError(400, 'staffId does not match an active staff member');
+  const actor = typeof caller === 'string' ? { id: caller } : caller;
+  const mayReassign = !actor || MAY_REASSIGN.has(actor.role);
 
   const { rows } = await query(
-    `UPDATE conversations SET assigned_staff_id = $2, updated_at = NOW()
-     WHERE id = $1 RETURNING *`,
-    [id, staffId]
+    `WITH prev AS (SELECT id, assigned_staff_id FROM conversations WHERE id = $1 FOR UPDATE)
+     UPDATE conversations cv SET assigned_staff_id = $2, updated_at = NOW()
+     FROM prev
+     WHERE cv.id = prev.id AND ${MAY_ACT_SQL('$3::uuid', '$4')}
+     RETURNING cv.*`,
+    [id, staffId, actor?.id ?? null, mayReassign]
   );
-  if (!rows.length) throw new HttpError(404, 'Conversation not found');
+  if (!rows.length) await refuseNotYours(id);
   return rows[0];
 }
 

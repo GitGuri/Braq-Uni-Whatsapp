@@ -816,6 +816,10 @@ describe('staff round 2', () => {
     // Each job appears in one queue only.
     assert.equal(await page.locator('.braq-queue-job', { hasText: quotation.reference }).count(), 1);
     await row.getByRole('button', { name: /^Create order/ }).click();
+    // Creating an order is hard to take back: the row asks first (FE-6).
+    const confirm = page.locator('.ant-popconfirm');
+    await confirm.getByText('Create the order for this quote?').or(confirm.getByText('Mark the quote accepted and create the order?')).waitFor();
+    await confirm.getByRole('button', { name: 'Create order' }).click();
     await page.getByText(/Create order — done/).waitFor();
     await row.waitFor({ state: 'detached' });
     const job = await call('GET', `/api/jobs/${quotation.id}`);

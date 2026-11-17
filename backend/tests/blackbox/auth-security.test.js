@@ -99,7 +99,6 @@ function enumerateMountedRoutes() {
 
 const PUBLIC = new Set([
   'POST /api/staff/login',
-  'GET /api/quotations/:id/pdf', // fetched by Meta's media downloader
   'GET /webhook',
   'POST /webhook',
 ]);
@@ -533,10 +532,10 @@ describe('HTTP hygiene', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-describe('public quotation PDF endpoint', () => {
-  test('non-existent UUID -> 404 without auth', async () => {
+describe('quotation PDF endpoint (staff only — AUTH-4)', () => {
+  test('without auth -> 401 (no PDF, no hint whether the quote exists)', async () => {
     const r = await call('GET', `/api/quotations/${crypto.randomUUID()}/pdf`);
-    assert.equal(r.status, 404);
+    assert.equal(r.status, 401);
     assertNoLeak(r);
   });
 
@@ -544,11 +543,11 @@ describe('public quotation PDF endpoint', () => {
     for (const id of ['not-a-uuid', "1' OR '1'='1"]) {
       const r = await call('GET', `/api/quotations/${encodeURIComponent(id)}/pdf`);
       assertNoLeak(r);
-      assert.ok([400, 404].includes(r.status), `${id} -> ${r.status} ${r.text}`);
+      assert.ok([400, 401, 404].includes(r.status), `${id} -> ${r.status} ${r.text}`); // 401: auth runs first (AUTH-4)
     }
   });
 
-  test('public PDF route does not open the rest of the quotations API', async () => {
+  test('the PDF route does not open the rest of the quotations API', async () => {
     const id = crypto.randomUUID();
     for (const p of [`/api/quotations/${id}`, `/api/quotations/${id}/pdf/../`, '/api/quotations/']) {
       const r = await call('GET', p);

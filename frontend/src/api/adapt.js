@@ -2,6 +2,7 @@
  * Response adapters — the one place API envelopes are unwrapped, so a contract
  * change only needs fixing here.
  */
+import { transportMessage } from '../utils/errorMessage.js'
 
 /**
  * Rows of a list response. New endpoints send { items, total, page, limit };
@@ -36,7 +37,9 @@ export function paged(data, legacyKey) {
 export function actionError(err, fallback = 'That did not work. Try again.') {
   const status = err?.response?.status ?? null
   const body = err?.response?.data ?? {}
-  let message = typeof body.error === 'string' && body.error.trim() ? body.error : null
+  // No response (timeout / network) or 503: say what it means, not "timeout of 30000ms exceeded".
+  let message = transportMessage(err)
+  if (!message && typeof body.error === 'string' && body.error.trim()) message = body.error
   if (!message && body.error && typeof body.error === 'object') {
     const parts = [
       ...(Array.isArray(body.error.formErrors) ? body.error.formErrors : []),

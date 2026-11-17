@@ -133,6 +133,56 @@ describe('core/logger redaction', () => {
   });
 });
 
+describe('SEC-4 catchAsyncRoutes: unwrapped handlers can no longer crash the process', () => {
+  let app;
+  const unhandled = [];
+  const onUnhandled = (e) => unhandled.push(e);
+  before(() => {
+    process.on('unhandledRejection', onUnhandled);
+    app = express();
+    const r = express.Router();
+    r.use((req, _res, next) => { req.seen = true; next(); });
+    r.get('/reject', async () => { throw new Error('db down'); });
+    r.get('/sync-throw', (req) => { req.body.message.trim(); });
+    r.get('/http-error', async () => { throw new errors.HttpError(409, 'Nope'); });
+    r.get('/ok', async (req, res) => res.json({ seen: req.seen }));
+    r.use((err, _req, res, _next) => res.status(599).json({ own: err.message })); // router error handler untouched
+    const nested = express.Router();
+    nested.get('/n', async () => { throw new Error('nested'); });
+    const outer = express.Router();
+    outer.use('/nested', nested);
+    http.catchAsyncRoutes(r);
+    http.catchAsyncRoutes(outer);
+    app.use(r);
+    app.use(outer);
+    app.use(errors.errorMiddleware);
+  });
+
+  test('a rejected async handler → 500 through the error middleware, no unhandled rejection', async () => {
+    const res = await request(app).get('/reject');
+    assert.equal(res.status, 599, 'reaches the router-level error handler first');
+    const n = await request(app).get('/nested/n');
+    assert.deepEqual([n.status, n.body], [500, { error: 'Internal server error' }]);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(unhandled.length, 0);
+    process.off('unhandledRejection', onUnhandled);
+  });
+
+  test('a synchronous throw is caught too; normal handlers and middleware are unchanged', async () => {
+    assert.equal((await request(app).get('/sync-throw')).status, 599);
+    assert.deepEqual((await request(app).get('/ok')).body, { seen: true });
+  });
+
+  test('wrapping twice is harmless', () => {
+    const r = express.Router();
+    r.get('/x', async () => {});
+    http.catchAsyncRoutes(r);
+    const first = r.stack[0].route.stack[0].handle;
+    http.catchAsyncRoutes(r);
+    assert.equal(r.stack[0].route.stack[0].handle, first);
+  });
+});
+
 describe('core/errors + core/http through express', () => {
   let app;
   before(() => {

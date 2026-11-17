@@ -1,8 +1,9 @@
+import { useRef, useState } from 'react'
 import { useParams, useNavigate, useLocation, Link, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { App, Button, Select, Skeleton, Tabs, Tooltip } from 'antd'
 import { CopyOutlined, FilePdfOutlined, UserAddOutlined } from '@ant-design/icons'
-import { listStaff } from '../../api/staff.js'
+import { listStaff, assignableStaff } from '../../api/staff.js'
 import { qk } from '../../lib/queryKeys.js'
 import { useStatus } from '../../lib/status.js'
 import { fromNow, money, date } from '../../lib/format.js'
@@ -35,7 +36,7 @@ function OwnerControl({ job }) {
         aria-label="Job owner"
         placeholder="Assign an owner"
         value={job.order.assigned_staff_id ?? undefined}
-        options={(data?.staff ?? []).map((s) => ({ value: s.id, label: s.name }))}
+        options={assignableStaff(data?.staff, job.order.assigned_staff_id).map((s) => ({ value: s.id, label: s.name }))}
         onChange={(v) => assign.mutate(v, {
           onSuccess: () => message.success('Owner changed'),
           onError: (err) => message.error(errorMessage(err, 'The owner was not changed')),
@@ -78,11 +79,26 @@ export default function JobPage() {
   const draft = useQuoteDraft(job?.quotation)
   const { run: runAction, pendingKey } = useJobActions(job)
   const pdf = useQuotePdf()
+  // While the draft is being saved before sending, the send button already shows as busy.
+  const [flushingKey, setFlushingKey] = useState(null)
+  const sending = useRef(false)
   // Sending the quote: save any edit still waiting for autosave first.
   const run = async (action, values, ctx) => {
-    if (action.key === 'price_quote' || action.key === 'send_quote') await draft.flush()
+    if (action.key === 'price_quote' || action.key === 'send_quote') {
+      if (sending.current) return { ok: false, error: null } // already on its way — ignore the second click
+      sending.current = true
+      setFlushingKey(action.key)
+      try {
+        await draft.flush()
+        return await runAction(action, values, ctx)
+      } finally {
+        sending.current = false
+        setFlushingKey(null)
+      }
+    }
     return runAction(action, values, ctx)
   }
+  const busyKey = flushingKey ?? pendingKey
 
   if (isLoading) {
     return <div style={{ display: 'grid', gap: 16 }}><Skeleton active paragraph={{ rows: 2 }} /><Skeleton.Node active style={{ width: '100%', height: 80 }} /><Skeleton active paragraph={{ rows: 6 }} /></div>
@@ -154,7 +170,7 @@ export default function JobPage() {
 
   const tabItems = [
     { key: 'quote', label: editable ? 'Quote (pricing)' : 'Quote', children: <QuotePanel quotation={q} draft={draft} editable={editable} /> },
-    { key: 'order', label: order ? 'Order' : 'Order (not yet)', children: <OrderPanel job={job} run={run} pendingKey={pendingKey} /> },
+    { key: 'order', label: order ? 'Order' : 'Order (not yet)', children: <OrderPanel job={job} run={run} pendingKey={busyKey} /> },
     { key: 'tickets', label: `Tickets${job.tickets.length ? ` (${job.tickets.length})` : ''}`, children: <TicketsPanel tickets={job.tickets} hasOrder={!!order} /> },
     { key: 'history', label: 'History', children: <HistoryPanel history={job.history} /> },
   ]
@@ -173,7 +189,7 @@ export default function JobPage() {
             lifecycle={lifecycle}
             context={context}
             run={run}
-            pendingKey={pendingKey}
+            pendingKey={busyKey}
             specialPayload={draft.payload}
             specialBlocker={draft.blocker}
             renderSpecial={() => <QuoteDraftSummary draft={draft} onEdit={tab !== 'quote' ? () => setTab('quote') : undefined} />}

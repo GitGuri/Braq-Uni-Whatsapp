@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  App, Button, Input, Spin, Select, Popconfirm, Drawer,
+  App, Alert, Button, Input, Spin, Select, Popconfirm, Drawer,
 } from 'antd'
 import {
   ArrowLeftOutlined, SendOutlined, CheckCircleOutlined, SwapOutlined, CloseCircleOutlined, RobotOutlined, LockOutlined, IdcardOutlined, WarningOutlined,
@@ -12,7 +12,7 @@ import {
   getConversation, replyToConversation, takeoverConversation,
   handbackConversation, closeConversation, markConversationRead, assignConversation,
 } from '../../api/conversations.js'
-import { listStaff } from '../../api/staff.js'
+import { listStaff, assignableStaff } from '../../api/staff.js'
 import { errorMessage } from '../../utils/errorMessage.js'
 import { qk } from '../../lib/queryKeys.js'
 import { useMediaQuery } from '../../lib/useMediaQuery.js'
@@ -150,13 +150,13 @@ export default function ConversationChat() {
   }, [data?.messages])
 
   // Conversation changes also move job flags (With consultant) — refresh those too.
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: qk.conversation(id) })
-    qc.invalidateQueries({ queryKey: qk.conversations() })
-    qc.invalidateQueries({ queryKey: qk.unread })
-    qc.invalidateQueries({ queryKey: qk.jobs() })
-    qc.invalidateQueries({ queryKey: ['job'] })
-  }
+  const invalidate = () => Promise.all([
+    qc.invalidateQueries({ queryKey: qk.conversation(id) }),
+    qc.invalidateQueries({ queryKey: qk.conversations() }),
+    qc.invalidateQueries({ queryKey: qk.unread }),
+    qc.invalidateQueries({ queryKey: qk.jobs() }),
+    qc.invalidateQueries({ queryKey: ['job'] }),
+  ])
 
   const replyMutation = useMutation({
     mutationFn: () => replyToConversation(id, replyText),
@@ -178,7 +178,8 @@ export default function ConversationChat() {
 
   const closeMutation = useMutation({
     mutationFn: () => closeConversation(id),
-    onSuccess: () => { antMessage.success('Conversation closed'); navigate('/inbox') },
+    // Mark the inbox list, counts and job flags stale first, so the inbox opens on fresh data.
+    onSuccess: () => { antMessage.success('Conversation closed'); invalidate(); navigate('/inbox') },
     onError: (err) => antMessage.error(errorMessage(err, 'Could not close this conversation')),
   })
 
@@ -191,7 +192,8 @@ export default function ConversationChat() {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey && replyText.trim()) {
       e.preventDefault()
-      replyMutation.mutate()
+      // One send at a time: Enter again while the last reply is on its way would send it twice.
+      if (!replyMutation.isPending) replyMutation.mutate()
     }
   }
 
@@ -212,6 +214,9 @@ export default function ConversationChat() {
   const isWaiting = conv.state === 'awaiting_consultant'
   const isActive = conv.state === 'consultant_active'
   const seen = seenRef.current
+  // WhatsApp only takes free-form messages within 24 hours of the client's last message.
+  const lastInbound = messages.reduce((t, m) => (m.direction === 'inbound' && m.sent_at && (!t || dayjs(m.sent_at).isAfter(t)) ? dayjs(m.sent_at) : t), null)
+  const outsideWindow = !lastInbound || dayjs().diff(lastInbound, 'hour', true) >= 24
 
   const clientPanel = <ClientPanel clientId={conv.client_id} conversationId={conv.id} />
 
@@ -260,7 +265,7 @@ export default function ConversationChat() {
             size="small"
             style={{ flex: '1 1 120px', minWidth: 120, maxWidth: 190 }}
             value={conv.assigned_staff_id ?? undefined}
-            options={staffList.map((s) => ({ value: s.id, label: s.name }))}
+            options={assignableStaff(staffList, conv.assigned_staff_id).map((s) => ({ value: s.id, label: s.name }))}
             onChange={(v) => assignMutation.mutate(v)}
             allowClear
           />
@@ -365,6 +370,15 @@ export default function ConversationChat() {
             </Button>
           </div>
         ) : (
+          <>
+          {outsideWindow && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+              message="Outside WhatsApp's 24-hour window — this message will need an approved template and may not be delivered as typed."
+            />
+          )}
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <Input.TextArea
               value={replyText}
@@ -378,13 +392,14 @@ export default function ConversationChat() {
             <Button
               type="primary"
               icon={<SendOutlined />}
-              onClick={() => replyMutation.mutate()}
+              onClick={() => { if (!replyMutation.isPending) replyMutation.mutate() }}
               loading={replyMutation.isPending}
               disabled={!replyText.trim()}
             >
               Send
             </Button>
           </div>
+          </>
         )}
       </div>
     </section>

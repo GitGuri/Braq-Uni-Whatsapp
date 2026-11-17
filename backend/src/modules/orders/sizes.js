@@ -93,6 +93,9 @@ function rowToEntry(record) {
 export async function bulkInsertSizeEntries(orderId, rows, { replace = false } = {}) {
   if (!rows.length && !replace) return [];
   return withTransaction(async (tx) => {
+    // Serialise uploads for this order: two concurrent replacements must not both
+    // survive merged into one roster (FIN-10).
+    await tx.query('SELECT id FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
     if (replace) await tx.query('DELETE FROM order_size_entries WHERE order_id = $1', [orderId]);
     const inserted = [];
     for (const row of rows) {

@@ -256,7 +256,7 @@ Parameters are built by `TEMPLATE_FALLBACKS` in
 |--------|------|-------------|
 | GET | `/api/quotations` | List quotations |
 | GET | `/api/quotations/:id` | Get a single quotation |
-| GET | `/api/quotations/:id/pdf` | PDF (public — used by WhatsApp document delivery) |
+| GET | `/api/quotations/:id/pdf` | PDF preview (staff only, `Cache-Control: private, no-store`). Clients receive the PDF as a WhatsApp document uploaded to Meta, never as a link to this route. |
 
 ### Webhook
 | Method | Path | Description |
@@ -315,6 +315,22 @@ npm run test:coverage --workspace=backend # backend unit tests with a coverage r
 ## Phase Roadmap
 
 - [x] **Phase 1** — API backend + WhatsApp bot + webhook
-- [ ] **Phase 2** — React staff dashboard
-- [ ] **Phase 3** — Quotation tool with PDF export
-- [ ] **Phase 4** — Reporting + analytics
+- [x] **Phase 2** — React staff dashboard
+- [x] **Phase 3** — Quotation tool with PDF export
+- [x] **Phase 4** — Reporting + analytics
+
+---
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Processes, module layout, request path, job queue/outbox, shutdown, logging, frontend |
+| [docs/DATABASE.md](docs/DATABASE.md) | Tables, constraints and indexes, migrations 0001–0014, migration runner, guarded scripts |
+| [docs/API.md](docs/API.md) | Every HTTP route: auth, permissions, request bodies, responses and error codes |
+| [docs/WHATSAPP_FLOW.md](docs/WHATSAPP_FLOW.md) | Webhook, bot turn, AI guard rails, handover, outbound/24-hour window, broadcasts, reminders |
+| [docs/BUSINESS_RULES.md](docs/BUSINESS_RULES.md) | Money, quotation and order lifecycles, payments, roles, items needing business verification |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Environment, Supabase, deploy steps, templates, recovery, pre-go-live checklist, tests |
+| [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) | Production readiness assessment |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Change history |
+| [docs/AUDIT_REPORT.md](docs/AUDIT_REPORT.md) | Phase one audit findings |

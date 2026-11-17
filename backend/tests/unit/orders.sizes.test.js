@@ -132,7 +132,9 @@ describe('bulkInsertSizeEntries / listSizeEntries', () => {
       { personName: 'B', size: 'M', notes: 'n' },
     ]);
     assert.deepEqual(r, [{ id: 'A' }, { id: 'B' }]);
-    assert.deepEqual(db.calls.map((c) => c.params), [['o1', 'A', 'S', null], ['o1', 'B', 'M', 'n']]);
+    // FIN-10: the order row is locked first, then the rows are inserted in order.
+    assert.match(db.calls[0].text, /SELECT id FROM orders WHERE id = \$1 FOR UPDATE/);
+    assert.deepEqual(db.calls.map((c) => c.params), [['o1'], ['o1', 'A', 'S', null], ['o1', 'B', 'M', 'n']]);
   });
 
   test('all inserts run in one transaction; a failing row rolls the whole roster back', async () => {
@@ -149,9 +151,10 @@ describe('bulkInsertSizeEntries / listSizeEntries', () => {
     db.on(/INSERT INTO order_size_entries/, (_t, p) => ({ rows: [{ id: p[1] }] }));
     await svc.bulkInsertSizeEntries('o1', [{ personName: 'A', size: 'S', notes: null }], { replace: true });
     assert.deepEqual(db.txLog, ['BEGIN', 'COMMIT']);
-    assert.match(db.calls[0].text, /DELETE FROM order_size_entries WHERE order_id = \$1/);
-    assert.deepEqual(db.calls[0].params, ['o1']);
-    assert.match(db.calls[1].text, /clock_timestamp\(\)/);
+    assert.match(db.calls[0].text, /FOR UPDATE/, 'FIN-10: one upload at a time per order');
+    assert.match(db.calls[1].text, /DELETE FROM order_size_entries WHERE order_id = \$1/);
+    assert.deepEqual(db.calls[1].params, ['o1']);
+    assert.match(db.calls[2].text, /clock_timestamp\(\)/);
   });
 
   test('more than MAX_ROSTER_ROWS rows → 400', async () => {

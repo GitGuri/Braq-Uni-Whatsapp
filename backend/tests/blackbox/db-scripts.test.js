@@ -19,10 +19,10 @@ after(async () => { await db?.end(); await env?.stop(); });
 const count = async (table) => Number((await db.query(`SELECT COUNT(*)::int AS n FROM ${table}`)).rows[0].n);
 
 /** Run a src/db script against an arbitrary database (cwd outside backend so the real .env is never read). */
-function runAgainst(databaseUrl, script) {
+function runAgainst(databaseUrl, script, extraEnv = {}) {
   try {
     execFileSync(process.execPath, [path.join(BACKEND, 'src', 'db', script)], {
-      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, DATABASE_URL: databaseUrl, LOG_LEVEL: 'error' },
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, DATABASE_URL: databaseUrl, LOG_LEVEL: 'error', ...extraEnv },
       cwd: os.tmpdir(), stdio: 'pipe', timeout: 120000,
     });
     return { ok: true, output: '' };
@@ -46,6 +46,38 @@ test('seed-testing.js populates demo data and is safe to re-run', async () => {
   const second = env.runDbScript('seed-testing.js');
   assert.ok(second.ok, `second run failed:\n${second.output}`);
   for (const [t, n] of Object.entries(counts)) assert.equal(await count(t), n, `${t} count changed on re-run`);
+});
+
+test('SEC-1: against production, seed-testing.js refuses and seed.js needs a real password', async () => {
+  await db.query('CREATE DATABASE prod_like');
+  const url = env.databaseUrl.replace(/\/braq_test$/, '/prod_like');
+  assert.ok(runAgainst(url, 'migrate.js').ok);
+  // The throwaway Postgres has a self-signed certificate (production defaults to verify).
+  const prod = { NODE_ENV: 'production', JWT_SECRET: 'x'.repeat(48), DB_SSL_MODE: 'no-verify' };
+
+  const demo = runAgainst(url, 'seed-testing.js', prod);
+  assert.equal(demo.ok, false);
+  assert.match(demo.output, /Refusing to load demo data/);
+
+  const catalog = runAgainst(url, 'seed-catalog.js', prod);
+  assert.equal(catalog.ok, false, 'no R0 placeholder catalog on production');
+  assert.match(catalog.output, /Refusing to seed the placeholder catalog/);
+
+  const noPass = runAgainst(url, 'seed.js', prod);
+  assert.equal(noPass.ok, false);
+  assert.match(noPass.output, /SEED_ADMIN_PASSWORD/);
+
+  const ok = runAgainst(url, 'seed.js', { ...prod, SEED_ADMIN_PASSWORD: 'a-long-unique-passphrase' });
+  assert.ok(ok.ok, ok.output);
+
+  const other = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  await other.connect();
+  try {
+    const { rows } = await other.query('SELECT email, role FROM staff ORDER BY email');
+    assert.deepEqual(rows, [{ email: 'admin@braquni.com', role: 'admin' }], 'only the seeded admin — no demo staff');
+  } finally {
+    await other.end();
+  }
 });
 
 test('repo scripts create every table the code queries', async () => {

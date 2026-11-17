@@ -6,6 +6,7 @@ import { App as AntApp } from 'antd'
 import { AuthProvider } from './auth/AuthContext.jsx'
 import { ThemeProvider } from './theme/ThemeContext.jsx'
 import App from './App.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 import './index.css'
 
 const queryClient = new QueryClient({
@@ -22,16 +23,19 @@ const queryClient = new QueryClient({
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ThemeProvider>
-          <AntApp>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </AntApp>
-        </ThemeProvider>
-      </BrowserRouter>
-    </QueryClientProvider>
+    {/* Last line of defence: a crash anywhere shows a Reload card instead of a blank page. */}
+    <ErrorBoundary fullPage>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <ThemeProvider>
+            <AntApp>
+              <AuthProvider>
+                <App />
+              </AuthProvider>
+            </AntApp>
+          </ThemeProvider>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ErrorBoundary>
   </React.StrictMode>
 )

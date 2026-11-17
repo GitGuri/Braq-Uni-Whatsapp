@@ -53,6 +53,63 @@ describe('stage guards', () => {
     assert.equal(done.json.to, 'completed');
   });
 
+  test('DAT-1: a repeated "Start production" (stale tab / retried request) is refused 409 STALE — no stage skipped, client told once', async () => {
+    const client = await bb.makeClient();
+    const o = await bb.order(client);
+    await bb.pay(o.id, 'deposit', Number(o.deposit_amount));
+    await bb.pay(o.id, 'balance', Number(o.balance_amount)); // paid in full: nothing else would stop ready → completed
+    const first = await bb.advance(o.id, { expect: 'in_production' });
+    assert.equal(first.status, 200, first.text);
+    await bb.env.waitForJobs();
+    const sentAfterFirst = bb.outbound(client.whatsapp_number).length;
+
+    const again = await bb.advance(o.id, { expect: 'in_production' });
+    assert.equal(again.status, 409, again.text);
+    assert.equal(again.json.code, 'STALE');
+    assert.equal((await orderDetail(o.id)).order.stage, 'in_production', 'not moved to ready');
+    await bb.env.waitForJobs();
+    assert.equal(bb.outbound(client.whatsapp_number).length, sentAfterFirst, 'no second stage message');
+
+    // Double "Mark ready" on a paid order must not mark it collected.
+    assert.equal((await bb.advance(o.id, { expect: 'ready' })).status, 200);
+    const twice = await bb.advance(o.id, { expect: 'ready' });
+    assert.deepEqual([twice.status, twice.json.code], [409, 'STALE']);
+    assert.equal((await orderDetail(o.id)).order.stage, 'ready');
+  });
+
+  test('DAT-1: a stale expect with a payment attached saves nothing (payment rolled back with the advance)', async () => {
+    const client = await bb.makeClient();
+    const o = await bb.order(client);
+    await bb.pay(o.id, 'deposit', Number(o.deposit_amount));
+    const r = await bb.advance(o.id, { expect: 'completed', payment: { amount: 1, type: 'balance' } });
+    assert.deepEqual([r.status, r.json.code], [409, 'STALE']);
+    const { rows } = await bb.db.query('SELECT COUNT(*)::int AS n FROM payments WHERE order_id = $1', [o.id]);
+    assert.equal(rows[0].n, 1, 'only the deposit');
+  });
+
+  test('FIN-1: "Record deposit + start production" submitted twice with one key → one payment, one advance, 200 replayed', async () => {
+    const client = await bb.makeClient();
+    const o = await bb.order(client);
+    const body = { type: 'deposit', amount: Number(o.deposit_amount), startProduction: {}, idempotencyKey: `k-${o.id}` };
+    const first = await bb.api('POST', `/api/orders/${o.id}/payments`, { token: bb.consultant.token, body });
+    assert.equal(first.status, 201, first.text);
+    assert.equal(first.json.advanced.to, 'in_production');
+    const again = await bb.api('POST', `/api/orders/${o.id}/payments`, { token: bb.consultant.token, body });
+    assert.equal(again.status, 200, again.text);
+    assert.equal(again.json.replayed, true);
+    assert.equal(again.json.payment.id, first.json.payment.id);
+    const { rows } = await bb.db.query('SELECT recorded_by FROM payments WHERE order_id = $1', [o.id]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].recorded_by, bb.consultant.id, 'who recorded it is stored');
+    assert.equal((await orderDetail(o.id)).order.stage, 'in_production', 'advanced once, not twice');
+  });
+
+  test('DAT-1: expect must be a real stage (400)', async () => {
+    const client = await bb.makeClient();
+    const o = await bb.order(client);
+    assert.equal((await bb.advance(o.id, { expect: 'shipped' })).status, 400);
+  });
+
   test('a proof out with the client blocks production → 409 PROOF_PENDING', async () => {
     const client = await bb.makeClient();
     const o = await bb.order(client);

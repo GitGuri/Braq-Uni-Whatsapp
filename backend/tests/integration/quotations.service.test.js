@@ -62,6 +62,20 @@ describe('createFromFreeText', () => {
     assert.equal(row.notes, '10 polos navy, 2 hoodies');
   });
 
+  test('FIN-4: fractional / huge quantities and sizes that do not add up are never auto-priced', async () => {
+    const client = await t.factory.client();
+    aiReplies({ parse: { items: [
+      { productId: products.polo.id, quantity: 2.5, description: '2.5 polos' },
+      { productId: products.polo.id, quantity: 900000, description: 'a lot of polos' },
+      { productId: products.hoodie.id, quantity: 10, sizes: [{ size: 'M', qty: 3 }, { size: 'L', qty: 3 }], description: '10 hoodies M×3 L×3' },
+      { productId: products.hoodie.id, quantity: 6, sizes: [{ size: 'TBC', qty: 6 }] },
+    ], unmatchedText: [] } });
+    const { quotation, unmatchedText } = await svc.createFromFreeText(client.id, 'mixed request');
+    assert.deepEqual(unmatchedText, ['2.5 polos', 'a lot of polos', '10 hoodies M×3 L×3']);
+    const priced = (await quoteRow(quotation.id)).line_items.filter((i) => i.priceConfirmed);
+    assert.deepEqual(priced.map((i) => i.quantity), [6], 'only the plausible line is auto-priced');
+  });
+
   test('unknown product / zero / negative / missing quantity → unmatched, then AI-suggested (unconfirmed) lines', async () => {
     const client = await t.factory.client();
     aiReplies({
@@ -226,6 +240,15 @@ describe('approveQuotation', () => {
     await t.drainJobs();
     assert.deepEqual((await t.jobs('quotation.pdf.send')).map((j) => [j.status, j.attempts]), [['done', 2]]);
     assert.equal(t.wa.documents().length, 1);
+  });
+
+  test('FIN-5: a PDF job for a quote revised back to draft before it ran sends nothing', async () => {
+    const q = await draft();
+    await svc.approveQuotation(q.id, [{ lineTotal: 1 }], null);
+    await t.query(`UPDATE quotations SET status = 'draft' WHERE id = $1`, [q.id]); // revised while the job waited
+    await t.drainJobs();
+    assert.equal(t.wa.documents().length, 0, 'no draft prices sent with "Reply accept"');
+    assert.deepEqual((await t.jobs('quotation.pdf.send')).map((j) => j.status), ['done']);
   });
 
   test('approving records the PDF message in the inbox and hands an awaiting-consultant chat back to the bot', async () => {

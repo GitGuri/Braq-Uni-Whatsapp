@@ -54,13 +54,22 @@ export function quoteGathering(c, { text = null, fresh = false } = {}) {
  * ordering but asked for items outside the catalogue — the order becomes a quote.
  */
 export async function finaliseQuotation(c, consolidatedText, { fromOrder = false } = {}) {
-  const { quotation, unmatchedText } = await createFromFreeText(c.client.id, consolidatedText, { conversationId: c.convo.id });
+  const { quotation, unmatchedText, replayed } = await createFromFreeText(c.client.id, consolidatedText, {
+    conversationId: c.convo.id, sourceEventId: c.turn.eventId,
+  });
 
-  // Auto-approve instantly when every item matched the catalog — no consultant needed
+  // Replay of a turn whose quote already went out automatically: nothing more to do.
+  if (replayed && quotation.status !== 'draft') {
+    c.setState('main_menu', { ...QUOTE_CONTEXT_RESET, orderHistory: null, orderFollowups: 0 });
+    return;
+  }
+
+  // Auto-approve instantly when every item matched the catalog — no consultant needed.
+  // Never on a replay: the original unmatched list is not stored, so a consultant checks it.
   const allCatalogMatched = !unmatchedText || unmatchedText.length === 0;
   const hasItems = Array.isArray(quotation.line_items) && quotation.line_items.length > 0;
 
-  if (allCatalogMatched && hasItems) {
+  if (allCatalogMatched && hasItems && !replayed) {
     await autoApproveQuotation(quotation.id, quotation.line_items);
     c.setState('main_menu', { ...QUOTE_CONTEXT_RESET, orderHistory: null, orderFollowups: 0 });
     // The PDF is queued by autoApproveQuotation — no extra text needed

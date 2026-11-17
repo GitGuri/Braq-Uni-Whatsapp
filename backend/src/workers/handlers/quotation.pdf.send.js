@@ -58,6 +58,11 @@ export default async function quotationPdfSend(payload, { job }) {
   const quotation = rows[0];
   if (!quotation) throw new PermanentJobError(`quotation.pdf.send: quotation ${quotationId} not found`);
   if (!quotation.client_wa) return { skipped: 'client has no WhatsApp number' };
+  // The quote may have been revised back to draft (or declined) while this job
+  // waited or retried: never send unreviewed prices with "Reply accept" (FIN-5).
+  if (!['sent', 'accepted'].includes(quotation.status)) {
+    return { skipped: `quotation is '${quotation.status}', not sent` };
+  }
 
   const pdf = await pdfToBuffer(renderQuotationPdf(quotation, {
     name:             quotation.client_name,

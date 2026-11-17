@@ -32,6 +32,35 @@ function sendError(prefix, err) {
 export const REENGAGEMENT_CODES = new Set([131047]);
 export const isReengagementError = (err) => REENGAGEMENT_CODES.has(Number(err?.metaCode));
 
+/**
+ * Meta codes that are worth retrying even though they come back as 4xx: rate and
+ * throughput limits, temporary unavailability (and an expired/invalid token,
+ * which ops can fix while the job waits).
+ */
+export const RETRYABLE_CODES = new Set([4, 80007, 130429, 131048, 131056, 131000, 131016, 190, 2]);
+
+/**
+ * True when resending the same request can never succeed: a 400/404 from the Graph
+ * API that is not a rate limit / outage (invalid parameter, recipient not on
+ * WhatsApp, bad media id…). Such a send is dead-lettered at once instead of being
+ * retried for ~20 minutes while it blocks the client's other messages (MSG-3).
+ */
+export function isPermanentSendError(err) {
+  if (!err || isReengagementError(err)) return false;
+  if (![400, 404].includes(Number(err.httpStatus))) return false;
+  return !RETRYABLE_CODES.has(Number(err.metaCode));
+}
+
+/** WhatsApp limits: text bodies 4096 characters, media captions 1024. */
+export const MAX_TEXT_LENGTH = 4096;
+export const MAX_CAPTION_LENGTH = 1024;
+
+/** Clip `text` to `max` characters (whole code points), ending with "…" when cut. */
+export function clipText(text, max = MAX_TEXT_LENGTH) {
+  const chars = Array.from(String(text ?? ''));
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 1).join('')}…`;
+}
+
 // ── Send a plain text message ─────────────────────────────────────────────────
 export async function sendTextMessage(to, body) {
   try {
@@ -40,7 +69,7 @@ export async function sendTextMessage(to, body) {
       recipient_type: 'individual',
       to,
       type: 'text',
-      text: { body, preview_url: false },
+      text: { body: clipText(body, MAX_TEXT_LENGTH), preview_url: false },
     });
     logger.info('WhatsApp message sent', { to, messageId: res.data?.messages?.[0]?.id });
     return res.data?.messages?.[0]?.id || null;
@@ -72,6 +101,7 @@ export async function uploadMedia(buffer, filename, mimeType = 'application/pdf'
 
 // ── Send an image — pass either url (public link) or mediaId (pre-uploaded) ──
 export async function sendImage(to, { url, mediaId, caption }) {
+  caption = caption ? clipText(caption, MAX_CAPTION_LENGTH) : caption;
   try {
     const imageField = mediaId
       ? { id: mediaId, ...(caption ? { caption } : {}) }
@@ -94,6 +124,7 @@ export async function sendImage(to, { url, mediaId, caption }) {
 
 // ── Send a document — pass either url (link) or mediaId (pre-uploaded) ───────
 export async function sendDocument(to, { url, mediaId, filename, caption }) {
+  caption = caption ? clipText(caption, MAX_CAPTION_LENGTH) : caption;
   try {
     const documentField = mediaId
       ? { id: mediaId, filename, caption }

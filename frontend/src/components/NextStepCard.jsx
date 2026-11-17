@@ -5,8 +5,11 @@ import ActionForm from './ActionForm.jsx'
 import OverrideDialog, { SKIP_CHECK_LABEL } from './OverrideDialog.jsx'
 import { useStatus } from '../lib/status.js'
 import { useCan } from '../lib/useCan.js'
+import { NO_RESPONSE_MUTATION } from '../utils/errorMessage.js'
 
 const keyOf = (a) => a.key + (a.ticketId ? `:${a.ticketId}` : '')
+// Steps whose endpoint (POST /orders/:id/advance) accepts a manager override.
+const OVERRIDABLE_ACTIONS = ['start_production', 'mark_ready', 'mark_collected']
 
 /**
  * "Next step" — renders lifecycle.nextActions as the backend sends them:
@@ -65,19 +68,25 @@ export default function NextStepCard({ lifecycle, context, run, pendingKey, rend
   const errorFor = (action) => {
     const err = errors[keyOf(action)]
     if (!err) return null
-    const mayOverride = err.overridable && can('order.override')
+    // Only a stage advance takes `override`; other steps (a deposit or design approval
+    // with "Start production now") would just be refused again — do that step on its own first.
+    const advance = OVERRIDABLE_ACTIONS.includes(action.key)
+    const mayOverride = advance && err.overridable && can('order.override')
     return (
       <Alert
         type={err.status === 409 ? 'warning' : 'error'}
         showIcon
         className="braq-next-error"
-        message={err.status === 409 ? `${action.label} is blocked` : `${action.label} did not go through`}
+        message={err.status === 409 ? `${action.label} is blocked`
+          : err.message === NO_RESPONSE_MUTATION ? `${action.label}: no answer from the server`
+            : `${action.label} did not go through`}
         description={(
           <>
             <div>{err.message}</div>
             {err.blockers?.length > 1 && <ul className="braq-blocker-list">{err.blockers.map((b) => <li key={b.code}>{b.message}</li>)}</ul>}
             {err.reasons?.length > 0 && <ul className="braq-blocker-list">{err.reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
-            {err.overridable && !mayOverride && <div style={{ marginTop: 4 }}>An admin or manager can skip this check.</div>}
+            {err.overridable && advance && !mayOverride && <div style={{ marginTop: 4 }}>An admin or manager can skip this check.</div>}
+            {err.overridable && !advance && <div style={{ marginTop: 4 }}>Untick “Start production now” to do this step on its own, then start production from the next step.</div>}
           </>
         )}
         action={mayOverride ? <Button size="small" onClick={() => startOverride(action, err.message, err.blockers)}>{SKIP_CHECK_LABEL}</Button> : undefined}
@@ -140,7 +149,7 @@ export default function NextStepCard({ lifecycle, context, run, pendingKey, rend
                   <div className="braq-blocked-note">An admin or manager can skip this check.</div>
                 )}
               </div>
-              {a.requiresOverride && a.overrideAllowed && (
+              {a.requiresOverride && a.overrideAllowed && OVERRIDABLE_ACTIONS.includes(a.key) && (
                 <Button size="small" onClick={() => startOverride(a, a.reason, a.blockers)}>{SKIP_CHECK_LABEL}</Button>
               )}
             </li>

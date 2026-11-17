@@ -9,6 +9,7 @@
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { pool, connectDirect, hasDirectUrl } from '../core/db.js';
+import { settleDeadSends } from './handlers/whatsapp.send.js';
 import { config } from '../core/config.js';
 import { logger, runWithContext } from '../core/logger.js';
 import { claimBatch, complete, fail, reclaimStale, prune, PermanentJobError } from '../core/queue.js';
@@ -49,13 +50,16 @@ export function startWorker({
     try {
       if (!handler) throw new PermanentJobError(`No handler for job type "${job.type}"`);
       await runWithContext({ jobId: job.id }, () => handler(job.payload || {}, { job }));
-      await complete(pool, job.id);
-      logger.debug('job done', { jobId: job.id, type: job.type, ms: Date.now() - started });
+      if (await complete(pool, job.id, job.locked_by)) {
+        logger.debug('job done', { jobId: job.id, type: job.type, ms: Date.now() - started });
+      } else {
+        logger.warn('job finished after its lock was reclaimed — the newer run owns it', { jobId: job.id, type: job.type });
+      }
     } catch (err) {
       try {
         const outcome = await fail(pool, job, err);
         const log = outcome === 'dead' ? logger.error : logger.warn;
-        log.call(logger, `job ${outcome === 'dead' ? 'dead-lettered' : 'failed, will retry'}`, {
+        log.call(logger, `job ${outcome === 'dead' ? 'dead-lettered' : outcome === 'lost' ? 'failed after its lock was reclaimed' : 'failed, will retry'}`, {
           jobId: job.id, type: job.type, attempt: job.attempts, error: err?.message,
         });
       } catch (e) {
@@ -96,6 +100,9 @@ export function startWorker({
     try {
       const reclaimed = await reclaimStale(pool);
       if (reclaimed) logger.warn('worker reclaimed stale jobs', { count: reclaimed });
+      // Dead sends whose handler never ran its final step (crash): inbox + broadcast bookkeeping.
+      const settled = await settleDeadSends({ query: (text, params) => pool.query(text, params) });
+      if (settled.messages || settled.broadcasts) logger.warn('worker settled dead-lettered sends', settled);
       if (Date.now() - lastPrune > PRUNE_EVERY_MS) {
         lastPrune = Date.now();
         const pruned = await prune(pool);

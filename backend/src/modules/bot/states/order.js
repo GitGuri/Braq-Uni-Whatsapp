@@ -22,7 +22,7 @@ import {
   isAccountClient, phoneDigits,
 } from '../lookups.js';
 import { listProducts } from '../../catalog/service.js';
-import { placeOrderFromQuotation, placeDirectOrder } from '../../orders/service.js';
+import { placeOrderFromQuotation, placeDirectOrder, orderForEvent } from '../../orders/service.js';
 import { notifyNewOrder } from '../../notifications/service.js';
 
 /** Subtotal / VAT / total / deposit (rands) for direct-order line items — cents maths from core/money.js. */
@@ -117,9 +117,15 @@ function quoteConfirmParams(q) {
   };
 }
 
+/**
+ * Status for ordering: an accepted quote past its validity without an order is
+ * treated as expired — the client gets a refresh at today's prices (FIN-2).
+ */
+const orderableStatus = (q) => (q?.status === 'accepted' && q.past_validity && !q.order_reference ? 'expired' : quoteStatus(q));
+
 /** Why a quote cannot be ordered from, in the client's terms. */
 function notReadyReply(c, q) {
-  const status = quoteStatus(q);
+  const status = orderableStatus(q);
   if (status === 'expired' && !q.order_reference) {
     c.setState(c.state, { pending: { kind: 'refresh_quote', quotationId: q.id, reference: q.reference } });
   }
@@ -132,7 +138,7 @@ function notReadyReply(c, q) {
 export async function orderQuoteRefLookup(c, reference) {
   const quotation = await findQuote(c.client.id, { reference });
   if (!quotation) return c.R(TEMPLATES.ORDER_QUOTE_NOT_FOUND);
-  if (!['sent', 'accepted'].includes(quoteStatus(quotation)) || quotation.order_reference) return notReadyReply(c, quotation);
+  if (!['sent', 'accepted'].includes(orderableStatus(quotation)) || quotation.order_reference) return notReadyReply(c, quotation);
   c.setState('order_confirm_quote', { pendingQuotationId: quotation.id });
   return c.R(TEMPLATES.ORDER_CONFIRM_QUOTE, quoteConfirmParams(quotation));
 }
@@ -228,9 +234,16 @@ async function finaliseDirectOrder(c, consolidatedText) {
 
 export async function orderConfirmDirect(c) {
   const pendingItems = c.convo.context.pendingOrderItems || [];
+  // A replay of the turn that already placed this order: confirm it again, place nothing (DAT-2).
+  const earlier = await orderForEvent(c.turn.eventId);
+  if (earlier) {
+    c.setState('main_menu', ORDER_CONTEXT_RESET);
+    c.notify(notifyNewOrder, earlier, c.client);
+    return c.R(TEMPLATES.ORDER_CREATED, { reference: earlier.reference, deposit: Number(earlier.deposit_amount), account: isAccountClient(c.client) });
+  }
   if (!pendingItems.length) return backToMenu(c);
   if (isConfirm(c)) {
-    const order = await placeDirectOrder(c.client.id, pendingItems, { conversationId: c.convo.id });
+    const order = await placeDirectOrder(c.client.id, pendingItems, { conversationId: c.convo.id, sourceEventId: c.turn.eventId });
     c.setState('main_menu', ORDER_CONTEXT_RESET);
     c.notify(notifyNewOrder, order, c.client);
     return c.R(TEMPLATES.ORDER_CREATED, { reference: order.reference, deposit: Number(order.deposit_amount), account: isAccountClient(c.client) });

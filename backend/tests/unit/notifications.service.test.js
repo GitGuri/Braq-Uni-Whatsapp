@@ -189,7 +189,10 @@ describe('notifyProofFeedback', () => {
 });
 
 describe('sendReminder', () => {
-  beforeEach(() => { consultants([{ name: 'A', email: 'a@x.co' }]); });
+  beforeEach(() => {
+    consultants([{ name: 'A', email: 'a@x.co' }]);
+    db.on(/^UPDATE \w+ SET \w+ = NOW\(\)\s+WHERE id = \$1 AND assigned_staff_id IS NULL/, (_t, params) => ({ rows: [{ id: params[0] }] }));
+  });
   const NOW = new Date('2026-10-20T12:00:00Z').getTime();
 
   const cases = [
@@ -207,10 +210,20 @@ describe('sendReminder', () => {
       assert.match(e.text, new RegExp(`Type: ${label}`));
       assert.ok(e.text.includes(`http://dash.test${link}`));
       const up = db.find(/^UPDATE /).at(-1);
-      assert.equal(up.text, `UPDATE ${table} SET ${col} = NOW() WHERE id = $1`);
+      assert.equal(up.text.replace(/\s+/g, ' '),
+        `UPDATE ${table} SET ${col} = NOW() WHERE id = $1 AND assigned_staff_id IS NULL AND ${col} IS NULL RETURNING id`);
       assert.deepEqual(up.params, ['i1']);
     });
   }
+
+  test('Q-3: claimed (or already reminded) after the scan read it → no email, returns false', async () => {
+    db.reset();
+    consultants([{ name: 'A', email: 'a@x.co' }]);
+    db.on(/^UPDATE \w+ SET/, { rows: [] }); // the conditional stamp matched nothing
+    const sent = await svc.sendReminder(tx, { id: 'i9', reference: 'REF', notified_at: new Date().toISOString() }, 'quotation');
+    assert.equal(sent, false);
+    assert.equal(queued().length, 0);
+  });
 
   test('singular "hour"; subject falls back to client name then Unknown', async () => {
     mock.timers.enable({ apis: ['Date'], now: NOW });

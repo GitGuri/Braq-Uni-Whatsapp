@@ -254,6 +254,8 @@ describe('quotation templates', () => {
       "⌛ Quote *BRQ-Q-1* expired on 3 Oct 2026.\n\nReply *1* and we'll refresh it at today's prices.");
     assert.match(T.QUOTE_STATUS({ reference: 'Q', status: 'sent', total: 115, validUntil: '9 Nov 2026', resent: true }), /R 115\.00[\s\S]*sent the PDF again[\s\S]*valid until \*9 Nov 2026\*/);
     assert.match(T.QUOTE_STATUS({ reference: 'Q', status: 'draft' }), /still pricing/);
+    // FIN-3: a draft's (possibly AI-suggested) total is never shown to the client
+    assert.doesNotMatch(T.QUOTE_STATUS({ reference: 'Q', status: 'draft', total: 4321 }), /R\s?4[\s,]?321|incl\. VAT/);
     assert.match(T.QUOTE_STATUS({ reference: 'Q', status: 'accepted', orderReference: 'BRQ-O-1' }), /order \*BRQ-O-1\*/);
     for (const st of ['draft', 'sent', 'accepted', 'expired', 'rejected', 'weird']) assertClean(assert, T.QUOTE_STATUS({ reference: 'Q', status: st }), st);
     assert.match(T.QUOTE_CHANGES_ASK({ reference: 'Q' }), /change on quote \*Q\*/);

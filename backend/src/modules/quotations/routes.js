@@ -9,10 +9,10 @@ export const quotationsRouter = express.Router();
 quotationsRouter.param('id', (req, res, next, id) =>
   isUuid(id) ? next() : res.status(400).json({ error: 'Invalid quotation id' }));
 
-// Public — Meta's WhatsApp document fetcher hits this with no auth (drafts: signed-in staff only).
-quotationsRouter.get('/:id/pdf', quotationsController.getPdf);
-
 quotationsRouter.use(requireAuth);
+// Staff only (AUTH-4): clients receive the PDF as a WhatsApp document uploaded to
+// Meta's media store (quotation.pdf.send), never as a link to this route.
+quotationsRouter.get('/:id/pdf', quotationsController.getPdf);
 quotationsRouter.get('/',           quotationsController.list);
 quotationsRouter.post('/',          quotationsController.create);
 quotationsRouter.get('/:id',        quotationsController.getById);

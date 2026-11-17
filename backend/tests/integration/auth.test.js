@@ -109,6 +109,100 @@ describe('staff route guards', () => {
   });
 });
 
+describe('AUTH-2 staff management: deactivate (never erase), last-admin and self guards, password', () => {
+  const del = (id, as) => request(app).delete(`/api/staff/${id}`).set('Authorization', bearer(as));
+  const patch = (id, as, body) => request(app).patch(`/api/staff/${id}`).set('Authorization', bearer(as)).send(body);
+  const staffRow = (id) => t.one('SELECT role, is_active FROM staff WHERE id = $1', [id]);
+
+  test('DELETE deactivates: the row and its history stay, the token stops working at once', async () => {
+    const admin = await t.factory.staff({ role: 'admin' });
+    const leaver = await t.factory.staff({ role: 'consultant' });
+    assert.equal((await del(leaver.id, admin)).status, 204);
+    assert.deepEqual(await staffRow(leaver.id), { role: 'consultant', is_active: false });
+    assert.equal((await request(app).get('/api/staff/me').set('Authorization', bearer(leaver))).status, 401);
+    const list = await request(app).get('/api/staff').set('Authorization', bearer(admin));
+    assert.equal(list.body.staff.find((s) => s.id === leaver.id).is_active, false, 'listed as inactive');
+  });
+
+  test('an admin cannot remove or demote themselves', async () => {
+    const admin = await t.factory.staff({ role: 'admin' });
+    await t.factory.staff({ role: 'admin' });
+    const r = await del(admin.id, admin);
+    assert.deepEqual([r.status, r.body.code], [400, 'SELF']);
+    assert.equal((await patch(admin.id, admin, { role: 'consultant' })).status, 400);
+    assert.deepEqual(await staffRow(admin.id), { role: 'admin', is_active: true });
+  });
+
+  test('two admins removing each other at the same moment → one wins, the other gets 409 LAST_ADMIN; one admin remains', async () => {
+    await t.query(`UPDATE staff SET is_active = false WHERE role = 'admin'`);
+    const a = await t.factory.staff({ role: 'admin' });
+    const b = await t.factory.staff({ role: 'admin' });
+    const [ra, rb] = await Promise.all([del(b.id, a), del(a.id, b)]);
+    const statuses = [ra.status, rb.status].sort();
+    // The loser either sees LAST_ADMIN (lock order) or is already deactivated by the winner (401 on its token).
+    assert.equal(statuses[0], 204);
+    assert.ok([401, 409].includes(statuses[1]), `second request: ${statuses[1]}`);
+    const { n } = await t.one(`SELECT COUNT(*)::int AS n FROM staff WHERE role = 'admin' AND is_active`);
+    assert.equal(n, 1);
+  });
+
+  test('service guard: removing or demoting the only active admin → 409 LAST_ADMIN', async () => {
+    const svc = await t.load('modules/staff/service.js');
+    await t.query(`UPDATE staff SET is_active = false WHERE role = 'admin'`);
+    const only = await t.factory.staff({ role: 'admin' });
+    await assert.rejects(svc.remove(only.id, null), (e) => e.status === 409 && e.extra?.code === 'LAST_ADMIN');
+    await assert.rejects(svc.update(only.id, null, { role: 'manager' }), (e) => e.extra?.code === 'LAST_ADMIN');
+    assert.deepEqual(await staffRow(only.id), { role: 'admin', is_active: true });
+  });
+
+  test('PATCH: role change, reactivation and password reset; consultants cannot', async () => {
+    const admin = await t.factory.staff({ role: 'admin' });
+    const c = await t.factory.staff({ role: 'consultant' });
+    assert.equal((await patch(c.id, c, { role: 'admin' })).status, 403);
+    const up = await patch(c.id, admin, { role: 'manager' });
+    assert.equal(up.status, 200, JSON.stringify(up.body));
+    assert.equal(up.body.staff.role, 'manager');
+    assert.equal(up.body.staff.password_hash, undefined);
+    assert.equal((await patch(c.id, admin, { password: 'short' })).status, 400);
+    assert.equal((await patch(c.id, admin, { password: 'BrandNewPass123' })).status, 200);
+    assert.equal((await patch(c.id, admin, { nonsense: 1 })).status, 400, 'unknown fields refused');
+    assert.equal((await patch(c.id, admin, {})).status, 400);
+  });
+
+  test('POST /me/password: needs the current password', async () => {
+    const me = await t.factory.staff({ role: 'consultant' });
+    const call = (body) => request(app).post('/api/staff/me/password').set('Authorization', bearer(me)).send(body);
+    const bad = await call({ currentPassword: 'wrong-password', newPassword: 'AnotherPass123' });
+    assert.deepEqual([bad.status, bad.body.code], [400, 'BAD_PASSWORD']);
+    assert.equal((await call({ currentPassword: 'x', newPassword: 'short' })).status, 400);
+  });
+});
+
+describe('AUTH-1 a consultant cannot take a colleague\'s chat through assign / handback', () => {
+  test('owner and managers may; another consultant gets 409 naming the owner and nothing changes', async () => {
+    const owner = await t.factory.staff({ role: 'consultant', name: 'Olivia Owner' });
+    const other = await t.factory.staff({ role: 'consultant' });
+    const manager = await t.factory.staff({ role: 'manager' });
+    const client = await t.factory.client();
+    const convo = await t.factory.conversation({ client_id: client.id, state: 'consultant_active' });
+    await t.query('UPDATE conversations SET assigned_staff_id = $2 WHERE id = $1', [convo.id, owner.id]);
+    const patch = (path, who, body) => request(app).patch(`/api/conversations/${convo.id}/${path}`).set('Authorization', bearer(who)).send(body);
+
+    const steal = await patch('assign', other, { staffId: other.id });
+    assert.deepEqual([steal.status, steal.body.code], [409, 'CONVERSATION_CLAIMED']);
+    assert.match(steal.body.error, /Olivia Owner/);
+    assert.equal((await patch('handback', other)).status, 409);
+    let row = await t.one('SELECT state, assigned_staff_id FROM conversations WHERE id = $1', [convo.id]);
+    assert.deepEqual([row.state, row.assigned_staff_id], ['consultant_active', owner.id]);
+
+    assert.equal((await patch('assign', owner, { staffId: other.id })).status, 200, 'the owner hands it to a colleague');
+    assert.equal((await patch('assign', manager, { staffId: owner.id })).status, 200, 'a manager may reassign');
+    assert.equal((await patch('handback', owner)).status, 200);
+    row = await t.one('SELECT state, assigned_staff_id FROM conversations WHERE id = $1', [convo.id]);
+    assert.deepEqual([row.state, row.assigned_staff_id], ['main_menu', null]);
+  });
+});
+
 describe('RBAC permission map on routes', () => {
   const as = async (role) => bearer(await t.factory.staff({ role }));
 

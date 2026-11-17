@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import * as staffService from './service.js';
 import { generateToken } from '../../middleware/auth.js';
-import { HttpError, sendError, validationBody } from '../../core/errors.js';
+import { HttpError, sendError, validationBody, isUuid } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 
 const LoginSchema = z.object({
@@ -58,13 +58,52 @@ export async function list(req, res) {
   }
 }
 
-// ── DELETE /staff/:id ─────────────────────────────────────────────────────────
+// ── DELETE /staff/:id — remove access (deactivates; history keeps the name) ───
 export async function remove(req, res) {
+  if (!isUuid(req.params.id)) return res.status(400).json({ error: 'Invalid staff id' });
   try {
-    await staffService.remove(req.params.id);
+    await staffService.remove(req.params.id, req.staff);
+    logger.info('Staff access removed', { staffId: req.params.id, by: req.staff.id });
     res.status(204).end();
   } catch (err) {
-    handleError(res, err, 'Failed to delete staff member');
+    handleError(res, err, 'Failed to remove staff member');
+  }
+}
+
+const UpdateStaffSchema = z.object({
+  role:     z.enum(['admin', 'consultant', 'manager']).optional(),
+  isActive: z.boolean().optional(),
+  password: z.string().min(8).max(200).optional(),
+}).strict().refine((b) => Object.keys(b).length > 0, 'Nothing to update');
+
+// ── PATCH /staff/:id — role, reactivate / deactivate, password reset (admin) ──
+export async function update(req, res) {
+  if (!isUuid(req.params.id)) return res.status(400).json({ error: 'Invalid staff id' });
+  const parsed = UpdateStaffSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json(validationBody(parsed.error));
+  try {
+    const staff = await staffService.update(req.params.id, req.staff, parsed.data);
+    logger.info('Staff updated', { staffId: req.params.id, fields: Object.keys(parsed.data), by: req.staff.id });
+    res.json({ staff });
+  } catch (err) {
+    handleError(res, err, 'Failed to update staff member');
+  }
+}
+
+const ChangePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(200),
+  newPassword:     z.string().min(8).max(200),
+});
+
+// ── POST /staff/me/password — change your own password ───────────────────────
+export async function changePassword(req, res) {
+  const parsed = ChangePasswordSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json(validationBody(parsed.error));
+  try {
+    await staffService.changeOwnPassword(req.staff.id, parsed.data);
+    res.status(204).end();
+  } catch (err) {
+    handleError(res, err, 'Failed to change password');
   }
 }
 

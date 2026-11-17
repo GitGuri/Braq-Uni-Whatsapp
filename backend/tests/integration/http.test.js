@@ -241,8 +241,11 @@ describe('broadcasts (modules/broadcasts/service.js)', () => {
     await t.factory.client({ whatsapp_number: '27850000003' });
     await t.factory.client({ whatsapp_number: '27850000004' });
     t.wa.failNext(1);
-    const r = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'x', audience: '__proto__' });
-    assert.equal(r.body.recipients, 2, 'unknown audience means all clients');
+    // An unknown audience (even a prototype key) is refused — never "everyone" (SEC-4).
+    const refused = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'x', audience: '__proto__' });
+    assert.equal(refused.status, 400);
+    const r = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'x', audience: 'all_clients' });
+    assert.equal(r.body.recipients, 2, 'all_clients reaches every client');
     await drainAll();
     assert.deepEqual(t.wa.sent.map((m) => m.to).sort(), ['27850000003', '27850000004']);
     let row = await broadcastRow(r.body.broadcastId);
@@ -250,7 +253,7 @@ describe('broadcasts (modules/broadcasts/service.js)', () => {
 
     t.wa.clear();
     t.wa.failNext(1000);
-    const dead = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'y' });
+    const dead = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'y', audience: 'all_clients' });
     await drainAll();
     row = await broadcastRow(dead.body.broadcastId);
     assert.deepEqual([row.status, row.sent_count, row.failed_count], ['done', 0, 2]);
@@ -260,7 +263,7 @@ describe('broadcasts (modules/broadcasts/service.js)', () => {
 
   test('re-running a fan-out sends nothing twice (dedupe per broadcast + recipient)', async () => {
     await t.factory.client({ whatsapp_number: '27850000007' });
-    const r = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'once' });
+    const r = await request(app).post('/api/broadcasts/custom').set('Authorization', token).send({ message: 'once', audience: 'all_clients' });
     await drainAll();
     const fanout = (await t.jobs('broadcast.fanout'))[0];
     await t.query(`INSERT INTO jobs (type, payload) VALUES ('broadcast.fanout', $1)`, [fanout.payload]);

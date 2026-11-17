@@ -37,14 +37,22 @@ export async function findOrderForTicket(clientId, text = '') {
   return recent[0] || null;
 }
 
-export async function createTicket({ clientId, orderId, category, description }) {
+/**
+ * A ticket raised by the client on WhatsApp. sourceEventId (the inbound event):
+ * a replay of the same bot turn returns the ticket it already created (DAT-2).
+ */
+export async function createTicket({ clientId, orderId, category, description, sourceEventId = null }) {
   const slaDueAt = new Date(Date.now() + TICKET_SLA_HOURS * 60 * 60 * 1000);
   const { rows } = await query(
-    `INSERT INTO tickets (client_id, order_id, category, description, sla_due_at)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [clientId, orderId || null, category, description, slaDueAt]
+    `INSERT INTO tickets (client_id, order_id, category, description, sla_due_at, source_event_id)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (source_event_id) WHERE source_event_id IS NOT NULL DO NOTHING
+     RETURNING *`,
+    [clientId, orderId || null, category, description, slaDueAt, sourceEventId]
   );
-  return rows[0];
+  if (rows.length) return rows[0];
+  const { rows: earlier } = await query('SELECT * FROM tickets WHERE source_event_id = $1', [sourceEventId]);
+  return earlier[0];
 }
 
 /** Staff open a ticket for a client (optionally on one of their orders); assigned to the creator. */

@@ -19,6 +19,7 @@ import { withTransaction, query } from '../../core/db.js';
 import { logger } from '../../core/logger.js';
 import { queueRecordedText, queueWhatsAppText } from '../notifications/whatsapp.js';
 import { TEMPLATES } from './templates.js';
+import { HUMAN_STATES } from '../lifecycle/machines.js';
 
 class DuplicateInbound extends Error {}
 
@@ -101,10 +102,28 @@ export function createTurn({ phoneNumber, metaMessageId = null, eventId = null }
       try {
         await withTransaction(async (tx) => {
           if (!(await turn.storeInbound(tx))) throw new DuplicateInbound();
+          // Staff may have changed the conversation while this turn ran (take-over,
+          // hand-back, proof sent…). Lock it and compare with the state the turn
+          // started from: the newer staff change wins — the turn's state changes are
+          // dropped, and so are its replies when a consultant now owns the chat (MSG-1).
+          let moved = false;
+          let humanNow = false;
+          if (turn.convo) {
+            const { rows } = await tx.query('SELECT state, assigned_staff_id FROM conversations WHERE id = $1 FOR UPDATE', [turn.convo.id]);
+            const now = rows[0]?.state;
+            moved = now !== undefined && now !== turn.convo.state;
+            // A consultant took the chat over: human state AND a new owner (a take-over
+            // always assigns). A bot-made hand-off (no owner change) keeps its reply.
+            humanNow = moved && HUMAN_STATES.includes(now)
+              && (rows[0].assigned_staff_id ?? null) !== (turn.convo.assigned_staff_id ?? null);
+            if (moved) logger.info('Conversation changed by staff during the bot turn — keeping their change', { from: turn.convo.state, now });
+          }
           if (turn.convo && turn.inboundBody != null) {
             await tx.query('UPDATE conversations SET last_message_at = NOW() WHERE id = $1', [turn.convo.id]);
           }
           for (const op of turn.ops) {
+            if (moved && op.kind === 'state') continue;
+            if (humanNow && op.kind === 'reply') continue;
             if (op.kind === 'state') {
               await tx.query(
                 `UPDATE conversations
