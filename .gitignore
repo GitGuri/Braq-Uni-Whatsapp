@@ -8,3 +8,4 @@ build/
 .DS_Store
 coverage/
 .claude/
+frontend/tests/tools/preview.json

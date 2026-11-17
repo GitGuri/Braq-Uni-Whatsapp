@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="theme-color" content="#EDEFF2" />
+    <title>Braq Connect — Staff Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap" rel="stylesheet" />
+    <script>
+      // Apply the saved theme before first paint so dark mode never flashes light.
+      (function () {
+        var t = 'light';
+        try { t = localStorage.getItem('braq_theme') || 'light'; } catch (e) {}
+        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

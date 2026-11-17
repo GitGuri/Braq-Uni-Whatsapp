@@ -2,18 +2,25 @@
   "name": "braquni-platform",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/api",
-    "start": "npm run start --workspace=apps/api",
-    "build": "npm run build --workspace=apps/api",
-    "test": "npm run test --workspace=apps/api",
-    "migrate": "npm run migrate --workspace=apps/api",
-    "seed": "npm run seed --workspace=apps/api",
-    "seed:testing": "npm run seed:testing --workspace=apps/api",
-    "backfill": "npm run backfill --workspace=apps/api",
-    "dashboard": "npm run dev --workspace=apps/dashboard",
-    "dashboard:build": "npm run build --workspace=apps/dashboard"
+    "dev": "npm run dev --workspace=backend",
+    "start": "npm run start --workspace=backend",
+    "worker": "npm run worker --workspace=backend",
+    "build": "npm run build --workspace=backend",
+    "test": "npm run test --workspace=backend",
+    "test:integration": "npm run test:integration --workspace=backend",
+    "migrate": "npm run migrate --workspace=backend",
+    "seed": "npm run seed --workspace=backend",
+    "seed:testing": "npm run seed:testing --workspace=backend",
+    "backfill": "npm run backfill --workspace=backend",
+    "dashboard": "npm run dev --workspace=frontend",
+    "dashboard:build": "npm run build --workspace=frontend",
+    "test:blackbox": "npm run test:blackbox --workspace=backend",
+    "test:frontend": "npm run test --workspace=frontend"
   },
   "description": "Braq Uni - Braq Connect WhatsApp Platform"
 }

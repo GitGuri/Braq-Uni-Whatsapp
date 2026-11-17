@@ -1,0 +1,99 @@
+// core/db.js with the pg driver replaced by a fake: query wrapper, transaction helper
+// (COMMIT / ROLLBACK / release) and testConnection.
+import './_setup.js';
+import { describe, test, before, beforeEach, mock } from 'node:test';
+import assert from 'node:assert/strict';
+import { src } from './_setup.js';
+
+const state = { poolOpts: null, poolQueries: [], clientQueries: [], released: 0, onHandlers: {}, failOn: null };
+class FakePool {
+  constructor(opts) { state.poolOpts = opts; }
+  on(ev, fn) { state.onHandlers[ev] = fn; }
+  async query(text, params) {
+    state.poolQueries.push({ text, params });
+    if (state.failOn && state.failOn.test(text)) throw new Error('pool boom');
+    return { rows: [{ ok: 1 }], rowCount: 1 };
+  }
+  async connect() {
+    return {
+      query: async (text, params) => {
+        state.clientQueries.push(text);
+        if (state.failOn && state.failOn.test(text)) throw new Error(`client boom on ${text}`);
+        return { rows: [{ v: 1 }] };
+      },
+      release: () => { state.released++; },
+    };
+  }
+}
+
+let pool;
+before(async () => {
+  mock.module('pg', { defaultExport: { Pool: FakePool } });
+  pool = await import(src('core/db.js'));
+});
+beforeEach(() => { state.poolQueries.length = 0; state.clientQueries.length = 0; state.released = 0; state.failOn = null; });
+
+describe('pool configuration', () => {
+  test('uses DATABASE_URL with SSL (no cert verification) and pool limits', () => {
+    assert.equal(state.poolOpts.connectionString, 'postgresql://x:x@127.0.0.1:1/x');
+    assert.deepEqual(state.poolOpts.ssl, { rejectUnauthorized: false });
+    assert.equal(state.poolOpts.max, 20);
+    assert.equal(state.poolOpts.idleTimeoutMillis, 10000);
+    assert.equal(state.poolOpts.allowExitOnIdle, true);
+    assert.equal(state.poolOpts.host, undefined);
+  });
+
+  test('pool error handler is registered and does not throw', () => {
+    assert.equal(typeof state.onHandlers.error, 'function');
+    state.onHandlers.error(new Error('idle client died'));
+  });
+});
+
+describe('query()', () => {
+  test('passes text/params through and returns the result', async () => {
+    const r = await pool.query('SELECT $1', [5]);
+    assert.deepEqual(r.rows, [{ ok: 1 }]);
+    assert.deepEqual(state.poolQueries[0], { text: 'SELECT $1', params: [5] });
+  });
+
+  test('rethrows driver errors', async () => {
+    state.failOn = /FAIL/;
+    await assert.rejects(pool.query('SELECT FAIL'), /pool boom/);
+  });
+});
+
+describe('withTransaction()', () => {
+  test('BEGIN → fn → COMMIT, returns fn result, releases client', async () => {
+    const r = await pool.withTransaction(async (tx) => { await tx.query('INSERT 1'); return 'done'; });
+    assert.equal(r, 'done');
+    assert.deepEqual(state.clientQueries, ['BEGIN', 'INSERT 1', 'COMMIT']);
+    assert.equal(state.released, 1);
+  });
+
+  test('fn throws → ROLLBACK, error rethrown, client released', async () => {
+    await assert.rejects(pool.withTransaction(async (tx) => { await tx.query('INSERT 1'); throw new Error('app failure'); }), /app failure/);
+    assert.deepEqual(state.clientQueries, ['BEGIN', 'INSERT 1', 'ROLLBACK']);
+    assert.equal(state.released, 1);
+  });
+
+  test('COMMIT failure → ROLLBACK attempted and client released', async () => {
+    state.failOn = /^COMMIT$/;
+    await assert.rejects(pool.withTransaction(async () => 1), /client boom on COMMIT/);
+    assert.deepEqual(state.clientQueries, ['BEGIN', 'COMMIT', 'ROLLBACK']);
+    assert.equal(state.released, 1);
+  });
+
+  test('BEGIN failure → client still released', async () => {
+    state.failOn = /^(BEGIN|ROLLBACK)$/;
+    await assert.rejects(pool.withTransaction(async () => 1), /client boom/);
+    assert.equal(state.released, 1);
+  });
+});
+
+describe('testConnection()', () => {
+  test('runs SELECT 1 and releases', async () => {
+    await pool.testConnection();
+    assert.deepEqual(state.clientQueries, ['SELECT 1']);
+    assert.equal(state.released, 1);
+  });
+});
